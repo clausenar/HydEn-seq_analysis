@@ -4,10 +4,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.backends.backend_pdf import PdfPages
 
-df=pd.read_csv('uniq.human.190216-MF-AR-58-human-i11-i157_reverse.bedgraph',sep="\t",header=None,skiprows=1)
-
-chrms=df[0].drop_duplicates()
-
 
 
 def get_files():
@@ -22,6 +18,7 @@ def make_plots():
         print ("this is first file")
         print (file)
         df=pd.read_csv(file,sep="\t",header=None,skiprows=1)
+        chrms=df[0].drop_duplicates()
 
         df.rename(columns={df.columns[0]:'chromosome'},inplace=True)
         df.rename(columns={df.columns[0]:'chromosome'},inplace=True)
