@@ -1,4 +1,4 @@
-print("testing")
+print("This script is used to display values for all bedgraph files")
 
 
 import os
