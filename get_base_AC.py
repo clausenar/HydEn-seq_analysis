@@ -136,6 +136,6 @@ bases=[4990,5068,2095,3997,3997,2095,5068,4990]
 for i in range(len(col)):
     unscaled['s'+col[i]]=unscaled[col[i]]/(bases[i]/16568)
 
-sns.clustermap(unscaled.iloc[:,8:16], vmin=0, vmax=2)
+sns.clustermap(unscaled.iloc[:,8:16], z_score=True)
 
 plt.savefig('output.png')
