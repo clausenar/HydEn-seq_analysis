@@ -1,8 +1,6 @@
 
 # coding: utf-8
 
-# In[60]:
-
 import pybedtools
 import os
 import pandas as pd
@@ -15,9 +13,6 @@ import seaborn as sns
 #import matplotlib as plt
 sns.set_theme()
 
-
-# In[41]:
-
 def relative_ratios(df):
     df.drop(["Unnamed: 0"],axis=1,inplace=True)
     df.set_index(bases['file'],inplace=True)
@@ -26,9 +21,6 @@ def relative_ratios(df):
     for i in ['A','G','C','T']:
         df["%"+i]=bases[i]/bases['total']
     return (df)
-
-
-# In[42]:
 
 def filter_bases(df):
     new_data=pd.DataFrame()
@@ -42,9 +34,6 @@ def filter_bases(df):
             new_data=new_data.append(roi)
     return (new_data)
 
-
-# In[43]:
-
 def mapping_to_genotype(df):
     names=pd.read_csv("SraRunTable-3.txt",sep=",")
     #print (names.head())
@@ -57,9 +46,6 @@ def mapping_to_genotype(df):
     df['Genotype']=df['SRR'].map(convert)
     #df=df.set_index(['Genotype'])
     return df
-
-
-# In[44]:
 
 def find_bases_forward(files):
     fasta = pybedtools.BedTool('/data4/clausenLab_repository/programs/fastq_pipeline_genomes/Homo_sapiens/UCSC/hg38/Sequence/WholeGenomeFasta/genome.fa')
