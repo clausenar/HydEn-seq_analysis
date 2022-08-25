@@ -90,9 +90,6 @@ def find_bases_forward(files):
     bases.to_csv("bases_forward.csv",sep="\t",index=None)
     return (bases)
 
-
-# In[45]:
-
 def find_bases_reverse(files):
     fasta = pybedtools.BedTool('/data4/clausenLab_repository/programs/fastq_pipeline_genomes/Homo_sapiens/UCSC/hg38/Sequence/WholeGenomeFasta/genome.fa')
     #files=[i for i in os.listdir("./bg") if i.endswith("reverse.bedgraph") and i.startswith("KCl-u") and int(i[24])%2!=0]
@@ -127,48 +124,20 @@ def find_bases_reverse(files):
     return (bases)
 
 
-# In[46]:
-
 files_forward=[i for i in os.listdir("./bg/KOH") if i.endswith("forward.bedgraph")]
-
 bases_forward=find_bases_forward(files_forward)
-
-
-# In[47]:
 
 files_reverse=[i for i in os.listdir("./bg/KOH") if i.endswith("reverse.bedgraph") ]
 bases_reverse=find_bases_reverse(files_reverse)
 
-
-# In[48]:
-
-#total_df=bases_forward+bases_reverse
-#total_df=pd.merge(bases_forward,bases_reverse,left_index=True, right_index=True)
 total_df=pd.merge(bases_forward,bases_reverse,on='SRR')
-
-
-# In[49]:
-
 total_df.set_index('Genotype_x',inplace=True)
-
-
-# In[50]:
-
 total_df.to_csv("final.csv",sep="\t",index=None)
-
-
-# In[51]:
 
 total_df=pd.read_csv("final.csv",sep="\t")
 total_df=total_df.set_index('Genotype_y')
 
-
-# In[52]:
-
 unscaled=total_df.iloc[:,np.r_[0:4,11:15]]
-
-
-# In[53]:
 
 with open('chrM.fa') as f:
     text=f.read()
@@ -177,25 +146,10 @@ with open('chrM.fa') as f:
 
 col=unscaled.columns
 bases=[4990,5068,2095,3997,3997,2095,5068,4990]
-print (col)
-
 
 for i in range(len(col)):
     unscaled['s'+col[i]]=unscaled[col[i]]/(bases[i]/16568)
 
-
-# In[58]:
-
-#sns.clustermap(unscaled[:,np.r_[0:4,11:15]])
 sns.clustermap(unscaled.iloc[:,8:16], vmin=0, vmax=2)
 
-
-# In[61]:
-
 plt.savefig('output.png')
-
-
-# In[ ]:
-
-
-
