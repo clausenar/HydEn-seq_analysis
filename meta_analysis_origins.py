@@ -3,16 +3,11 @@
 
 
 
-
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-
-
-
-
 
 trans={
         "chr1":"chrI",
@@ -31,10 +26,6 @@ trans={
         "chr14":"chrXIV",
         "chr15":"chrXV",
         "chr16":"chrXVI"}
-
-
-
-
 
 def make_meta(file):
     meta=pd.DataFrame(pd.interval_range(start=-2000, freq=50, end=2000))
@@ -67,8 +58,6 @@ def make_meta(file):
     #plt.show()
     return meta['total']
 
-
-
 def total_counts(file):
     data=pd.read_csv(file,sep="\t",header=None,skiprows=1)
     return data[3].sum()
@@ -77,13 +66,9 @@ files=[i for i in os.listdir() if i.endswith("bedgraph")]
 for file in files:
     print (file,total_counts(file))
 
-
-
-
-
 def make_plots():
     files=[i for i in os.listdir() if i.endswith("forward.bedgraph")]
-    files=['uniq.yeast.Pol2MG.rnh201.1b.GSM1521150.SRR1609185_forward.bedgraph']
+    #files=['uniq.yeast.Pol2MG.rnh201.1b.GSM1521150.SRR1609185_forward.bedgraph']
     control="uniq.yeast.Rnh201.1.a.GSM1521143.SRR1609175_forward.bedgraph"
     control_forward=make_meta(control)
     control_reverse_file=control.replace("forward","reverse")
@@ -107,18 +92,11 @@ def make_plots():
         plt.show()
     return full
 
-
-
-
-
-
-
-
-
-
 total=make_plots()
 
 
+
+total
 
 
 
