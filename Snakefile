@@ -1,7 +1,8 @@
 samples=["Pol2MG.rnh201.1b.GSM1521150.SRR1609186"]
 
 rule all:
-	input:"unhit_oligo-KOH_2"
+	input:"output_bedtools_bg_plus_strand.txt"
+
 
 rule cut_adapt_pair:
 	input:
@@ -24,45 +25,35 @@ rule map_toward_oligo:
 
 rule extract_pair:
 	input:i1="R1.cutadapt.paired.oligo_unhit",i2="SRR1609188_R1_001001.out.paired.fastq"
-	output:"unhit_oligo-KOH_2"
+	output:"unhit_oligo-KOH_6"
+	shell:"python extract.py {input.i1} {input.i2} {output}"
 
+rule align:
+	input:i1="R1.cutadapt.paired_1.oligo_unhit",i2="unhit_oligo-KOH_6"
+	output:"sample1152"
+	shell:"bowtie -m1 -v2 -p8 -X2000  /data4/clausenLab_repository/programs/fastq_pipeline_genomes/yeast/Saccharomyces_cerevisiae/UCSC/sacCer3/Sequence/BowtieIndex/genome -1 {input.i1} -2 {input.i2} {output}"
 
-	###runs: perl -e 'open(IN,"R1.cutadapt.paired.oligo_unhit"); while(<IN>) { chomp; $table{$_}=1; $toss=<IN>; $toss=<IN>; $toss=<IN>; } close(IN); open(IN," SRR1609188_R1_001001.out.paired.fastq"); while(<IN>) { chomp; if(exists($table{$_})) { print "$_\n"; $toss=<IN>; print $toss; $toss=<IN>; print $toss; $toss=<IN>; print $toss; } else { $toss=<IN>; $toss=<IN>; $toss=<IN>; } } close(IN);' > unhit_oligo-KOH_3
-	shell:"perl -e 'open(IN,"R1.cutadapt.paired.oligo_unhit"); while(<IN>) { chomp; $table{$_}=1; $toss=<IN>; $toss=<IN>; $toss=<IN>; } close(IN); open(IN," SRR1609188_R1_001001.out.paired.fastq"); while(<IN>) { chomp; if(exists($table{$_})) { print "$_\n"; $toss=<IN>; print $toss; $toss=<IN>; print $toss; $toss=<IN>; print $toss; } else { $toss=<IN>; $toss=<IN>; $toss=<IN>; } } close(IN);' > unhit_oligo-KOH_3"
+rule extract_mate1:
+	input:"sample1152"
+	output:"mate1.out.txt"
+	shell:"perl -ane 'print $_ if $F[0]=/\/1/;'  {input} > {output}"
 
+#rule realign_unhit_to_organism:
+#	input:
+#	output:
+#	shell:"bowtie $m -v2 -p8 $index{$org} $tmp/"$sample"_1.unhit $tmp/"$sample"_1.unhit.out 2>>  $stats.3.tmp"
 
+rule sam2bam:
+	input:"sample_sam.pair"
+	output:"sample_sam.pair.bam"
+	shell:"samtools view -S {input} > {output}"
 
-#rule align:
-#	input:"R1.cutadapt.paired_1.oligo_unhit"
-#	output:"sample.pair"
-#	shell:"bowtie --sam -v2 -p8 -X2000 /data4/clausenLab_repository/programs/fastq_pipeline_genomes/yeast/Saccharomyces_cerevisiae/UCSC/sacCer3/Sequence/BowtieIndex/genome -1 R1.cutadapt.paired.oligo_unhit.paired.fq -2 Pol2MG.rnh201.2a.GSM1521151.SRR1609188.R2.out.paired.fq sample_sam.pair "
+rule sort:
+	input:"sample_sam.pair.bam"
+	output:"sample_sam.pair.bam.sorted"
+	shell:"samtools sort {input} -o {output}"
 
-
-#rule sam2bam:
-#	input:"sample_sam.pair"
-#	output:"sample_sam.pair.bam"
-#	shell:"samtools view -S {input} > {output}"
-
-#rule sort:
-#	input:"sample_sam.pair.bam"
-#	output:"sample_sam.pair.bam.sorted"
-#	shell:"samtools sort {input} -o {output}"
-
-#rule bedtools:
-#	input:"sample_sam.pair.bam.sorted"
-#	output:"output_bedtools_bg_plus_strand.txt"
-#	shell:"bedtools genomecov -d -5 -ibam {input} -g genome.fa > {output}"
-
-
-#rule reformat_bedtools:
-#	input:"old.txt"
-#	output:"bed.reformat2"
-#	script:"""perl -lane "for ({$F[1]+1}..{$F[2]}) { print "{$F[0]}\t$_\t{$F[3]}" }" input.txt"""
-#	         #perl -lane 'for ($F[1]+1..$F[2]) { print "$F[0]\t$_\t$F[3]" }' input.txt
-#	#script:"""perl -lane 'for ($F[1]+1..$F[2]) {print "{{$F[0]}\t$_\t$F[2]\t$F[3]"}' old.txt"""
-#script:"""perl -lane 'for ($F[1]+1..$F[2]) {print "$F[0]\t$_\t$F[2]\t$F[3]"}" output_bedtools_bg_plus_strand.txt"""
-
-#rule bedgraph:
-#	input:"sample.pair"
-#	output:"out1","out2"
-#	shell:"./bowtie2bedgraph-t1.pl sample.pair ./"
+rule bedtools:
+	input:"sample_sam.pair.bam.sorted"
+	output:"output_bedtools_bg_plus_strand.txt"
+	shell:"bedtools genomecov -d -5 -ibam {input} -g genome.fa > {output}"
