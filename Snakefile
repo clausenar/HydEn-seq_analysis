@@ -1,14 +1,8 @@
-#SAMPLES=["/home/anders/snakemake-demo/Pol2MG.rnh201.2a.GSM1521151.SRR1609188"]
 import os
+
 SAMPLES=[i.split("_")[0] for i in os.listdir() if i.endswith("gz")] 
 
-#SAMPLES=["A"]
-##some code
-
 rule all:
-#	#input:"Pol2MG.rnh201.2a.GSM1521151.SRR1609188_1122"
-#	#input:"Pol2MG.rnh201.2a.GSM1521151.SRR1609188_mate1"
-	#input:"Pol2MG.rnh201.2a.GSM1521151.SRR1609188_forward.bedgraph","Pol2MG.rnh201.2a.GSM1521151.SRR1609188_reverse.bedgraph"
 	input:expand(["{sample}__forward.bedgraph","{sample}__reverse.bedgraph"],sample=SAMPLES)
 
 rule cut_adapt_pair:
