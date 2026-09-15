@@ -5,9 +5,11 @@ from pybedtools import BedTool
 import pysam
 
 # --- CONFIGURATION ---
-REFERENCE_FASTA = "/Users/xranea/genome/sacCer3.fa"
-INPUT_DIR = "/Users/xranea/bedgraphs"
-OUTPUT_DIR = "/Users/xranea/bedgraphs/processed_results"
+# Same HYDEN_GENOME/HYDEN_OUT_DIR env vars the Snakefile uses, so one set of
+# overrides (e.g. in a container entrypoint) configures the whole pipeline.
+REFERENCE_FASTA = os.environ.get("HYDEN_GENOME", "/Users/xranea/genome/sacCer3") + ".fa"
+INPUT_DIR = os.environ.get("HYDEN_OUT_DIR", "/Users/xranea/bedgraphs")
+OUTPUT_DIR = os.path.join(INPUT_DIR, "processed_results")
 TOTALS_FILE = "base_count_totals.txt"
 # ---------------------
 

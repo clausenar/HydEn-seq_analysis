@@ -7,10 +7,13 @@ import matplotlib.colors
 import matplotlib.pyplot as plt
 
 # --- CONFIGURATION (defaults; overridable via CLI args, see main()) ---
-ORIGINS_FILE = "/Users/xranea/git/HydEn-seq_analysis/or200.txt"
+# or200.txt ships alongside this script, so default to it there rather than
+# an absolute path tied to one specific checkout location.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ORIGINS_FILE = os.environ.get("HYDEN_ORIGINS_FILE", os.path.join(_SCRIPT_DIR, "or200.txt"))
 FORWARD_BEDGRAPH = "/Users/xranea/bedgraphs/Kunkel_Ribo-seq_Pol2MGrnh201.1b.1__forward.bedgraph"
 REVERSE_BEDGRAPH = "/Users/xranea/bedgraphs/Kunkel_Ribo-seq_Pol2MGrnh201.1b.1__reverse.bedgraph"
-OUTPUT_DIR = "/Users/xranea/bedgraphs/processed_results"
+OUTPUT_DIR = os.path.join(os.environ.get("HYDEN_OUT_DIR", "/Users/xranea/bedgraphs"), "processed_results")
 
 WINDOW = 2000   # bp on each side of the origin midpoint
 BIN_SIZE = 50   # bp per bin
