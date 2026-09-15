@@ -1,3 +1,11 @@
+"""HydEn-seq/Ribo-seq pipeline: raw paired-end reads to strand-specific bedGraphs.
+
+Trims adapters, filters out oligo-matching reads, aligns to the reference
+genome (salvaging mate1 of pairs that fail to align together via single-end
+realignment), and emits per-base ribonucleotide pileups plus origin-centered
+metaplots. See README.md for environment setup and usage.
+"""
+
 import os
 
 # All paths default to this machine's local layout but can be overridden via
@@ -38,6 +46,7 @@ def raw_fastq(sample, end):
 	raise FileNotFoundError(f"No {end} fastq found for sample {sample} in {RAW_DIR}")
 
 rule all:
+	"""Default target: bedGraphs, per-base count totals, and origin metaplots for every sample."""
 	input:
 		expand([os.path.join(OUT_DIR, "{sample}__forward.bedgraph"), os.path.join(OUT_DIR, "{sample}__reverse.bedgraph")], sample=SAMPLES),
 		os.path.join(OUT_DIR, "processed_results", "base_count_totals.txt"),
@@ -45,6 +54,7 @@ rule all:
 
 
 rule cut_adapt_pair:
+	"""Trim sequencing adapters from both mates, keeping R1/R2 in lockstep."""
 	input:
 		read1=lambda wc: raw_fastq(wc.sample, "end1"),
 		read2=lambda wc: raw_fastq(wc.sample, "end2")
@@ -61,6 +71,7 @@ rule cut_adapt_pair:
 	shell:"cutadapt -j {threads} -a file:./bin/for.txt -A file:./bin/for.txt --match-read-wildcards --quiet -m 15 -q 10 -o {output.read1} -p {output.read2} {input.read1} {input.read2}"
 
 rule map_toward_oligo:
+	"""Drop R1 reads that match the oligo contaminant reference."""
 	input:
 		os.path.join(OUT_DIR, "{sample}_R1_cut")
 	output:
@@ -74,6 +85,7 @@ rule map_toward_oligo:
 
 
 rule extract_pair:
+	"""Re-sync R2 to the R1 reads that survived oligo filtering."""
 	input:
 		i1=os.path.join(OUT_DIR, "{sample}_R1_cut.unhit"),
 		i2=os.path.join(OUT_DIR, "{sample}_R2_cut")
@@ -91,6 +103,7 @@ rule extract_pair:
 		"rm -rf {params.tmpdir}"
 
 rule align:
+	"""Paired alignment to the reference genome, capturing pair-alignment failures for salvage."""
 	input:
 		i1=os.path.join(OUT_DIR, "{sample}_R1_cut.unhit"),
 		i2=os.path.join(OUT_DIR, "{sample}_R2_cut.unhit")
@@ -109,6 +122,7 @@ rule align:
 	shell: "bowtie -S -m1 -v2 -p{threads} -X2000 --un {params.unhit_prefix} -x {GENOME} -1 {input.i1} -2 {input.i2} {output.sam}"
 
 rule sort_bam:
+	"""Coordinate-sort the paired alignment."""
 	input:
 		os.path.join(OUT_DIR, "{sample}_pair.sam")
 	output:
@@ -116,6 +130,7 @@ rule sort_bam:
 	shell: "samtools sort -o {output} {input}"
 
 rule extract_mate1_paired:
+	"""Pull mapped mate1 reads out of the successfully-paired alignments."""
 	input:
 		os.path.join(OUT_DIR, "{sample}_pair.sorted.bam")
 	output:
@@ -124,6 +139,7 @@ rule extract_mate1_paired:
 	shell: "samtools view -b -f 64 -F 4 {input} > {output}"
 
 rule realign_unhit_single:
+	"""Salvage mate1 of pairs that failed to align together by realigning it single-end."""
 	input:
 		os.path.join(OUT_DIR, "{sample}_pair_1.unhit")
 	output:
@@ -136,6 +152,7 @@ rule realign_unhit_single:
 	shell: "bowtie -S -m1 -v2 -p{threads} -x {GENOME} {input} {output}"
 
 rule extract_mate1_singleton:
+	"""Pull mapped reads out of the salvaged single-end realignment."""
 	input:
 		os.path.join(OUT_DIR, "{sample}_pair_1.unhit.sam")
 	output:
@@ -143,6 +160,7 @@ rule extract_mate1_singleton:
 	shell: "samtools view -b -F 4 {input} | samtools sort -o {output} -"
 
 rule merge_mate1:
+	"""Combine paired and salvaged-singleton mate1 reads into the final mate1 pool."""
 	input:
 		paired=os.path.join(OUT_DIR, "{sample}_mate1_paired.bam"),
 		singleton=os.path.join(OUT_DIR, "{sample}_mate1_singleton.sorted.bam")
@@ -151,6 +169,7 @@ rule merge_mate1:
 	shell: "samtools merge -f {output} {input.paired} {input.singleton}"
 
 rule bedgraph:
+	"""Build strand-specific per-base pileups at the incorporated ribonucleotide's position."""
 	input:
 		os.path.join(OUT_DIR, "{sample}_mate1.bam")
 	output:
@@ -168,6 +187,7 @@ rule bedgraph:
 		"{{e=$3+1; if(e<=len[$1]){{print $1,$2+1,e,$4}}}}' {GENOME_FAI} - > {output.rv}"
 
 rule count_bases:
+	"""Summarize per-base ribonucleotide counts across all samples' bedGraphs."""
 	input:
 		expand([os.path.join(OUT_DIR, "{sample}__forward.bedgraph"), os.path.join(OUT_DIR, "{sample}__reverse.bedgraph")], sample=SAMPLES)
 	output:
@@ -177,6 +197,7 @@ rule count_bases:
 	shell: "{BIO_ENV_PYTHON} count_bases.py"
 
 rule origin_metaplot:
+	"""Render origin-centered heatmaps/metaplots of strand-specific signal around replication origins."""
 	input:
 		fw=os.path.join(OUT_DIR, "{sample}__forward.bedgraph"),
 		rv=os.path.join(OUT_DIR, "{sample}__reverse.bedgraph")
