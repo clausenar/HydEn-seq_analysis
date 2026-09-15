@@ -55,21 +55,24 @@ in `~/.zshrc`. Remove it and open a new terminal.
 
 ## Data layout
 
-Paths are hardcoded at the top of the `Snakefile` and each script — edit
-those `CONFIGURATION`/variable blocks directly rather than passing CLI args.
+Paths default to this machine's local layout but are all overridable via
+`HYDEN_*` environment variables (see [AWS deployment](#aws-deployment) below
+for why) — set one before running `snakemake`/the scripts, or edit the
+`CONFIGURATION`/variable block defaults directly for a permanent local change.
 
-| Path | Contents |
-|---|---|
-| `/Users/xranea/raw/` | Full-depth raw paired-end fastq files, named `{sample}_end1.fastq` / `{sample}_end2.fastq` (`RAW_DIR` in the Snakefile) |
-| `/Users/xranea/raw_test/` | A small subsampled fastq pair for fast sanity-checking pipeline changes before running the full dataset |
-| `/Users/xranea/genome/sacCer3*` | Bowtie1 index (`.ebwt`), reference fasta (`.fa`), and fasta index (`.fa.fai`) |
-| `bin/oligo/oligo*` | Bowtie1 index used to filter out oligo-matching reads |
-| `or200.txt` | Replication origin coordinates (OriDB), used by `origin_metaplot.py` |
-| `/Users/xranea/bedgraphs/` | All pipeline intermediates and final bedGraphs (`OUT_DIR` in the Snakefile) |
-| `/Users/xranea/bedgraphs/processed_results/` | Output of `count_bases.py`; per-sample subfolders hold `origin_metaplot.py` output |
+| Path | Env var | Contents |
+|---|---|---|
+| `/Users/xranea/raw/` | `HYDEN_RAW_DIR` | Full-depth raw paired-end fastq files, named `{sample}_end1.fastq` / `{sample}_end2.fastq` |
+| `/Users/xranea/raw_test/` | — | A small subsampled fastq pair for fast sanity-checking pipeline changes before running the full dataset |
+| `/Users/xranea/genome/sacCer3*` | `HYDEN_GENOME` (prefix, no extension) | Bowtie1 index (`.ebwt`), reference fasta (`.fa`), and fasta index (`.fa.fai`) |
+| `bin/oligo/oligo*` | `HYDEN_OLIGOS` (prefix, no extension) | Bowtie1 index used to filter out oligo-matching reads. Defaults to this repo's own `bin/oligo/oligo`, resolved relative to the Snakefile's location |
+| `or200.txt` | `HYDEN_ORIGINS_FILE` | Replication origin coordinates (OriDB), used by `origin_metaplot.py`. Defaults to this repo's own copy |
+| `/Users/xranea/bedgraphs/` | `HYDEN_OUT_DIR` | All pipeline intermediates and final bedGraphs |
+| `/Users/xranea/bedgraphs/processed_results/` | (derived from `HYDEN_OUT_DIR`) | Output of `count_bases.py`; per-sample subfolders hold `origin_metaplot.py` output |
 
-To switch which dataset the pipeline runs on, change `RAW_DIR` at the top of
-the `Snakefile` (e.g. back to `/Users/xranea/raw_test` for a quick test run).
+To switch which dataset the pipeline runs on locally, change `RAW_DIR`'s
+default at the top of the `Snakefile` (e.g. back to `/Users/xranea/raw_test`
+for a quick test run), or export `HYDEN_RAW_DIR` before running `snakemake`.
 
 ## Running the pipeline
 
@@ -205,3 +208,134 @@ excluding OriDB's unnamed/`null` entries):
   leading/lagging-strand switch as replication forks diverge
 - `origin_matrix_watson[_named].tsv` / `origin_matrix_crick[_named].tsv` —
   the raw origin × bin matrices, for re-analysis without rerunning the script
+
+## AWS deployment
+
+The pipeline also runs on AWS Batch (Fargate), reading input and writing
+output through S3, in AWS account `069509443906` (`us-east-1`, profile
+`ec2-pipeline` locally). Everything below is already provisioned and live —
+this section documents what exists and how to use/rebuild it.
+
+### Architecture
+
+```
+S3 landing/{sample}/*.fastq[.gz]
+        │  (S3 event on upload)
+        ▼
+Lambda: hyden-seq-landing-watcher
+  - waits until both _end1 and _end2 exist for {sample}
+  - S3 conditional-write lock (locks/{sample}.lock) so the two
+    near-simultaneous upload events don't both submit a job
+        │  batch:SubmitJob
+        ▼
+AWS Batch (queue: hyden-seq-job-queue, job def: hyden-seq-pipeline-job)
+  Fargate task running the hyden-seq-pipeline:latest image (ECR)
+  docker/batch_entrypoint.sh:
+    1. sync s3://.../reference/        → /data/reference  (genome, oligo index, or200.txt)
+    2. sync s3://.../landing/{sample}/ → /data/raw
+    3. HYDEN_* env vars point the unmodified Snakefile at /data/*
+    4. snakemake --cores 8
+    5. sync /data/output → s3://.../output/{sample}/
+    6. move s3://.../landing/{sample}/ → s3://.../processed_raw/{sample}/
+```
+
+### Provisioned resources
+
+| Resource | Name | Notes |
+|---|---|---|
+| S3 bucket | `kunkel-ribo-data-2026` | See prefixes below |
+| ECR repo | `hyden-seq-pipeline` | One combined image (both conda envs) |
+| IAM role | `hyden-seq-batch-execution-role` | Pulls the ECR image, writes CloudWatch logs |
+| IAM role | `hyden-seq-batch-job-role` | Container's own S3 read/write, scoped to the bucket |
+| IAM role | `hyden-seq-batch-service-role` | Batch's own service role |
+| IAM role | `hyden-seq-landing-watcher-role` | Lambda's S3 + `batch:SubmitJob` permissions |
+| IAM role | `hyden-seq-github-actions-ecr-push` | GitHub Actions' OIDC role for CI image builds — ECR push only, this repo's `main` branch only |
+| IAM OIDC provider | `token.actions.githubusercontent.com` | Lets GitHub Actions assume AWS roles without stored credentials |
+| Batch compute environment | `hyden-seq-fargate-ce` | Fargate, scales to zero, max 16 vCPU |
+| Batch job queue | `hyden-seq-job-queue` | |
+| Batch job definition | `hyden-seq-pipeline-job` | 8 vCPU / 16GB, command = `[input_uri, output_uri, reference_uri?, processed_raw_uri?]` |
+| Lambda | `hyden-seq-landing-watcher` | Triggered by S3 `ObjectCreated` under `landing/` |
+
+S3 prefixes in `kunkel-ribo-data-2026`:
+
+| Prefix | Contents |
+|---|---|
+| `reference/` | Genome index, oligo index, `or200.txt` — synced to `/data/reference` at container startup. Update the reference by re-uploading here; no image rebuild needed |
+| `landing/{sample}/` | Drop zone — upload a sample's paired fastqs here to trigger automatic processing |
+| `processed_raw/{sample}/` | Raw fastqs moved here after a landing-triggered job completes |
+| `output/{sample}/` | Pipeline output, same layout as local `OUT_DIR` |
+| `locks/{sample}.lock` | Landing-watcher idempotency markers (S3 conditional-write locks) |
+
+### Using the landing zone (fully automatic)
+
+```bash
+aws s3 cp my_sample_end1.fastq s3://kunkel-ribo-data-2026/landing/my_sample/my_sample_end1.fastq --profile ec2-pipeline
+aws s3 cp my_sample_end2.fastq s3://kunkel-ribo-data-2026/landing/my_sample/my_sample_end2.fastq --profile ec2-pipeline
+```
+
+That's it — the Lambda picks up the second upload, submits a Batch job once
+both mates are present, and the raw files end up in `processed_raw/my_sample/`
+once it succeeds. Watch progress via:
+
+```bash
+aws logs tail /aws/lambda/hyden-seq-landing-watcher --since 5m --profile ec2-pipeline
+aws batch list-jobs --job-queue hyden-seq-job-queue --job-status RUNNING --profile ec2-pipeline
+```
+
+### Submitting a job manually
+
+Bypasses the landing zone — useful for reprocessing, or input that's already
+in S3 somewhere else:
+
+```bash
+aws batch submit-job --profile ec2-pipeline --region us-east-1 \
+  --job-name hyden-seq-my-sample \
+  --job-queue hyden-seq-job-queue \
+  --job-definition hyden-seq-pipeline-job \
+  --container-overrides '{"command":["s3://kunkel-ribo-data-2026/some/input/prefix/","s3://kunkel-ribo-data-2026/output/my_sample/"]}'
+```
+
+The command list is `[input_uri, output_uri]`, with two optional trailing
+args: a reference-data URI (defaults to `s3://kunkel-ribo-data-2026/reference/`)
+and a processed-raw destination URI (if omitted, raw input is left in place).
+
+### Rebuilding and redeploying the image
+
+`docker/Dockerfile` builds by `git clone`-ing this repo at build time (arg
+`GIT_REF`) rather than copying a local checkout — the image always runs the
+exact code at a real, traceable commit. There is no "repo on AWS" to keep in
+sync: edit code locally, open a PR, merge to `main` like any other change.
+
+**This now happens automatically.** `.github/workflows/build-and-push-image.yml`
+rebuilds and pushes the image to ECR (tag `:latest`) on every push to `main`
+that touches pipeline code (`Snakefile`, `*.py`, `bin/`, `or200.txt`,
+`docker/`) — pinned to the exact triggering commit SHA. It authenticates to
+AWS via OIDC federation (role `hyden-seq-github-actions-ecr-push`, scoped to
+this repo's `main` branch and ECR push on this one repository — no AWS keys
+stored in GitHub), and uses GitHub Actions' cache backend for Docker layers,
+so only the final `git clone` layer actually rebuilds on most runs rather
+than reinstalling both conda environments from scratch. This is decoupled
+from job execution: Batch jobs always run whatever image currently has the
+`:latest` tag, regardless of how often data lands in the S3 landing zone or
+how many jobs run — only a code change on `main` triggers a rebuild.
+
+To trigger a rebuild without a code change (e.g. after editing the workflow
+itself), use **Actions → Build and push pipeline image → Run workflow** on
+GitHub, or `gh workflow run build-and-push-image.yml`.
+
+To build manually instead (e.g. for local testing before merging):
+
+```bash
+cd docker
+docker build --platform linux/amd64 -t hyden-seq-pipeline:latest -f Dockerfile .
+# pin a specific commit instead of latest main:
+#   docker build --platform linux/amd64 --build-arg GIT_REF=<commit-sha> -t hyden-seq-pipeline:latest -f Dockerfile .
+
+aws ecr get-login-password --region us-east-1 --profile ec2-pipeline \
+  | docker login --username AWS --password-stdin 069509443906.dkr.ecr.us-east-1.amazonaws.com
+docker tag hyden-seq-pipeline:latest 069509443906.dkr.ecr.us-east-1.amazonaws.com/hyden-seq-pipeline:latest
+docker push 069509443906.dkr.ecr.us-east-1.amazonaws.com/hyden-seq-pipeline:latest
+```
+
+New Batch jobs pick up the `:latest` tag automatically — no job definition
+change needed unless resource requirements (vCPU/memory) change.
