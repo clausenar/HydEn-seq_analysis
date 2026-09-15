@@ -241,22 +241,14 @@ AWS Batch (queue: hyden-seq-job-queue, job def: hyden-seq-pipeline-job)
 
 ### Provisioned resources
 
-| Resource | Name | Notes |
-|---|---|---|
-| S3 bucket | `kunkel-ribo-data-2026` | See prefixes below |
-| ECR repo | `hyden-seq-pipeline` | One combined image (both conda envs) |
-| IAM role | `hyden-seq-batch-execution-role` | Pulls the ECR image, writes CloudWatch logs |
-| IAM role | `hyden-seq-batch-job-role` | Container's own S3 read/write, scoped to the bucket |
-| IAM role | `hyden-seq-batch-service-role` | Batch's own service role |
-| IAM role | `hyden-seq-landing-watcher-role` | Lambda's S3 + `batch:SubmitJob` permissions |
-| IAM role | `hyden-seq-github-actions-ecr-push` | GitHub Actions' OIDC role for CI image builds — ECR push only, this repo's `main` branch only |
-| IAM OIDC provider | `token.actions.githubusercontent.com` | Lets GitHub Actions assume AWS roles without stored credentials |
-| Batch compute environment | `hyden-seq-fargate-ce` | Fargate, scales to zero, max 16 vCPU |
-| Batch job queue | `hyden-seq-job-queue` | |
-| Batch job definition | `hyden-seq-pipeline-job` | 8 vCPU / 16GB, command = `[input_uri, output_uri, reference_uri?, processed_raw_uri?]` |
-| Lambda | `hyden-seq-landing-watcher` | Triggered by S3 `ObjectCreated` under `landing/` |
+**Storage**
 
-S3 prefixes in `kunkel-ribo-data-2026`:
+| Resource | Notes |
+|---|---|
+| S3 bucket `kunkel-ribo-data-2026` | All data — see prefixes below |
+| ECR repo `hyden-seq-pipeline` | One combined image (both conda envs) |
+
+S3 prefixes:
 
 | Prefix | Contents |
 |---|---|
@@ -265,6 +257,41 @@ S3 prefixes in `kunkel-ribo-data-2026`:
 | `processed_raw/{sample}/` | Raw fastqs moved here after a landing-triggered job completes |
 | `output/{sample}/` | Pipeline output, same layout as local `OUT_DIR` |
 | `locks/{sample}.lock` | Landing-watcher idempotency markers (S3 conditional-write locks) |
+
+**Compute**
+
+| Resource | Notes |
+|---|---|
+| Batch compute environment `hyden-seq-fargate-ce` | Fargate, serverless, scales to zero — no cost when idle, max 16 vCPU |
+| Batch job queue `hyden-seq-job-queue` | |
+| Batch job definition `hyden-seq-pipeline-job` | 8 vCPU / 16GB, command = `[input_uri, output_uri, reference_uri?, processed_raw_uri?]` |
+| Lambda `hyden-seq-landing-watcher` | Triggered by S3 `ObjectCreated` under `landing/`; auto-submits Batch jobs |
+
+**IAM** (each role scoped to only what it needs)
+
+| Role | Grants |
+|---|---|
+| `hyden-seq-batch-execution-role` | Pulls the ECR image, writes CloudWatch logs |
+| `hyden-seq-batch-job-role` | Container's own S3 read/write, scoped to the bucket |
+| `hyden-seq-batch-service-role` | Batch's own AWS-managed service role |
+| `hyden-seq-landing-watcher-role` | Lambda's S3 + `batch:SubmitJob` permissions |
+| `hyden-seq-github-actions-ecr-push` | GitHub Actions' OIDC role for CI image builds — ECR push only, this repo's `main` branch only |
+| OIDC provider `token.actions.githubusercontent.com` | Lets GitHub Actions assume the role above without any stored AWS credentials |
+
+### What's automatic vs manual
+
+- **Fully automatic**: merging code to `main` → image rebuild (CI); uploading a
+  complete fastq pair to `landing/{sample}/` → job submission → output in S3
+  → raw data archived to `processed_raw/`
+- **Manual, by choice**: submitting a job directly via `aws batch submit-job`
+  (for reprocessing existing data, or input that's already elsewhere in S3)
+
+### Cost shape
+
+Nothing runs, and nothing is billed, while idle. Ongoing cost is just S3 and
+ECR storage (both cheap at this data scale) plus whatever Fargate compute a
+job actually consumes while running. Lambda invocations and GitHub Actions
+minutes stay comfortably inside the free tier at any normal usage frequency.
 
 ### Using the landing zone (fully automatic)
 
