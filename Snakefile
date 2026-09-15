@@ -1,8 +1,11 @@
 import os
 
-RAW_DIR = "/Users/xranea/raw"
-OLIGOS = "/Users/xranea/git/HydEn-seq_analysis/bin/oligo/oligo"
-GENOME = "/Users/xranea/genome/sacCer3"
+# All paths default to this machine's local layout but can be overridden via
+# environment variables (e.g. in a container entrypoint), so the exact same
+# Snakefile runs unmodified locally and on AWS Batch - no manual patching.
+RAW_DIR = os.environ.get("HYDEN_RAW_DIR", "/Users/xranea/raw")
+OLIGOS = os.environ.get("HYDEN_OLIGOS", os.path.join(workflow.basedir, "bin/oligo/oligo"))
+GENOME = os.environ.get("HYDEN_GENOME", "/Users/xranea/genome/sacCer3")
 GENOME_FAI = GENOME + ".fa.fai"
 
 # count_bases.py and origin_metaplot.py need pybedtools/matplotlib, which
@@ -13,7 +16,7 @@ GENOME_FAI = GENOME + ".fa.fai"
 BIO_ENV_PYTHON = "conda run -n bio_env python"
 
 # Denna mapp kommer nu att hålla ALLA genererade filer (både temporära och slutliga)
-OUT_DIR = "/Users/xranea/bedgraphs"
+OUT_DIR = os.environ.get("HYDEN_OUT_DIR", "/Users/xranea/bedgraphs")
 
 # FIX: Lägg till [0] efter split för att få ut strängen, vilket gör den "hashable" för set()
 # Accept both plain and gzipped fastq; cutadapt/bowtie read .fastq.gz natively.
