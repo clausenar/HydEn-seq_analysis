@@ -15,10 +15,10 @@ GENOME_FAI = GENOME + ".fa.fai"
 # up, and a direct binary path skips that activation step entirely.
 BIO_ENV_PYTHON = "conda run -n bio_env python"
 
-# Denna mapp kommer nu att hålla ALLA genererade filer (både temporära och slutliga)
+# This folder now holds ALL generated files (both temporary and final)
 OUT_DIR = os.environ.get("HYDEN_OUT_DIR", "/Users/xranea/bedgraphs")
 
-# FIX: Lägg till [0] efter split för att få ut strängen, vilket gör den "hashable" för set()
+# FIX: Add [0] after split to get the string out, which makes it hashable for set()
 # Accept both plain and gzipped fastq; cutadapt/bowtie read .fastq.gz natively.
 SAMPLES = list(set([
 	i.split("_end")[0]
@@ -68,7 +68,7 @@ rule map_toward_oligo:
 	params:
 		oligo_max=os.path.join(OUT_DIR, "{sample}_R1.cutadapt.paired.oligo_max"),
 		dump=os.path.join(OUT_DIR, "{sample}_dump.tmp")
-	# FIX: Lagt till {OUT_DIR}/ framför oligo_max-filen så att den hamnar utanför din repo
+	# FIX: Added {OUT_DIR}/ in front of the oligo_max file so it ends up outside your repo
 	# oligo_max/dump are wildcarded by {sample} so concurrent samples don't race on the same file.
 	shell: "bowtie -m1 -v2 --max {params.oligo_max} --un {output} -x {OLIGOS} {input} {params.dump}"
 
@@ -95,9 +95,18 @@ rule align:
 		i1=os.path.join(OUT_DIR, "{sample}_R1_cut.unhit"),
 		i2=os.path.join(OUT_DIR, "{sample}_R2_cut.unhit")
 	output:
-		temp(os.path.join(OUT_DIR, "{sample}_pair.sam"))
+		sam=temp(os.path.join(OUT_DIR, "{sample}_pair.sam")),
+		# reads that don't align as a pair - captured here so their mate1 can
+		# be salvaged via single-end realignment below (see realign_unhit_single).
+		# bowtie's --un inserts _1/_2 before the last dot-segment of the
+		# prefix rather than appending after it, so "{sample}_pair.unhit"
+		# becomes "{sample}_pair_1.unhit" / "{sample}_pair_2.unhit".
+		unhit1=temp(os.path.join(OUT_DIR, "{sample}_pair_1.unhit")),
+		unhit2=temp(os.path.join(OUT_DIR, "{sample}_pair_2.unhit"))
+	params:
+		unhit_prefix=os.path.join(OUT_DIR, "{sample}_pair.unhit")
 	threads: 8
-	shell: "bowtie -S -m1 -v2 -p{threads} -X2000 -x {GENOME} -1 {input.i1} -2 {input.i2} {output}"
+	shell: "bowtie -S -m1 -v2 -p{threads} -X2000 --un {params.unhit_prefix} -x {GENOME} -1 {input.i1} -2 {input.i2} {output.sam}"
 
 rule sort_bam:
 	input:
@@ -106,13 +115,40 @@ rule sort_bam:
 		temp(os.path.join(OUT_DIR, "{sample}_pair.sorted.bam"))
 	shell: "samtools sort -o {output} {input}"
 
-rule extract_mate1:
+rule extract_mate1_paired:
 	input:
 		os.path.join(OUT_DIR, "{sample}_pair.sorted.bam")
 	output:
-		os.path.join(OUT_DIR, "{sample}_mate1.bam")
+		temp(os.path.join(OUT_DIR, "{sample}_mate1_paired.bam"))
 	# -f 64: first-in-pair (mate1) reads only, -F 4: drop unmapped reads
 	shell: "samtools view -b -f 64 -F 4 {input} > {output}"
+
+rule realign_unhit_single:
+	input:
+		os.path.join(OUT_DIR, "{sample}_pair_1.unhit")
+	output:
+		temp(os.path.join(OUT_DIR, "{sample}_pair_1.unhit.sam"))
+	threads: 8
+	# Salvages mate1 of read pairs that failed to align together: realigned
+	# single-end, same stringency as the paired alignment above. Only read1
+	# is retried (matching HydEn.pl's original behavior) since the
+	# ribonucleotide position is always read from mate1's 5' end.
+	shell: "bowtie -S -m1 -v2 -p{threads} -x {GENOME} {input} {output}"
+
+rule extract_mate1_singleton:
+	input:
+		os.path.join(OUT_DIR, "{sample}_pair_1.unhit.sam")
+	output:
+		temp(os.path.join(OUT_DIR, "{sample}_mate1_singleton.sorted.bam"))
+	shell: "samtools view -b -F 4 {input} | samtools sort -o {output} -"
+
+rule merge_mate1:
+	input:
+		paired=os.path.join(OUT_DIR, "{sample}_mate1_paired.bam"),
+		singleton=os.path.join(OUT_DIR, "{sample}_mate1_singleton.sorted.bam")
+	output:
+		os.path.join(OUT_DIR, "{sample}_mate1.bam")
+	shell: "samtools merge -f {output} {input.paired} {input.singleton}"
 
 rule bedgraph:
 	input:
