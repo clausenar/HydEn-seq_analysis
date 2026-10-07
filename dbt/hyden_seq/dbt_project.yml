@@ -7,8 +7,15 @@ profile: "hyden_seq"
 model-paths: ["models"]
 clean-targets: ["target", "dbt_packages"]
 
+# The Snowflake user has DEFAULT_SECONDARY_ROLES = ALL, which would let every
+# dbt session also use ACCOUNTADMIN. Turning secondary roles off keeps dbt
+# limited to HYDEN_DBT_ROLE (see admin/hyden_dbt_role.sql).
+on-run-start:
+  - "use secondary roles none"
+
 models:
   hyden_seq:
+    +pre-hook: "use secondary roles none"
     staging:
       +materialized: view
       +schema: staging
