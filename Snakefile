@@ -46,11 +46,12 @@ def raw_fastq(sample, end):
 	raise FileNotFoundError(f"No {end} fastq found for sample {sample} in {RAW_DIR}")
 
 rule all:
-	"""Default target: bedGraphs, per-base count totals, and origin metaplots for every sample."""
+	"""Default target: bedGraphs, per-base count totals, origin metaplots, and braid plots for every sample."""
 	input:
 		expand([os.path.join(OUT_DIR, "{sample}__forward.bedgraph"), os.path.join(OUT_DIR, "{sample}__reverse.bedgraph")], sample=SAMPLES),
 		os.path.join(OUT_DIR, "processed_results", "base_count_totals.txt"),
-		expand(os.path.join(OUT_DIR, "processed_results", "{sample}", "origin_metaplot.png"), sample=SAMPLES)
+		expand(os.path.join(OUT_DIR, "processed_results", "{sample}", "origin_metaplot.png"), sample=SAMPLES),
+		expand(os.path.join(OUT_DIR, "processed_results", "{sample}", "braid_plot.png"), sample=SAMPLES)
 
 
 rule cut_adapt_pair:
@@ -209,3 +210,17 @@ rule origin_metaplot:
 		"{BIO_ENV_PYTHON} origin_metaplot.py "
 		"--forward-bedgraph {input.fw} --reverse-bedgraph {input.rv} "
 		"--output-dir {params.outdir}"
+
+rule braid_plot:
+	"""Genome-wide log2(Watson/Crick) ribonucleotide ratio, 500bp bins, one panel per chromosome."""
+	input:
+		fw=os.path.join(OUT_DIR, "{sample}__forward.bedgraph"),
+		rv=os.path.join(OUT_DIR, "{sample}__reverse.bedgraph")
+	output:
+		os.path.join(OUT_DIR, "processed_results", "{sample}", "braid_plot.png")
+	params:
+		outdir=os.path.join(OUT_DIR, "processed_results", "{sample}")
+	shell:
+		"{BIO_ENV_PYTHON} braid_plot.py "
+		"--forward-bedgraph {input.fw} --reverse-bedgraph {input.rv} "
+		"--genome-fai {GENOME_FAI} --output-dir {params.outdir}"

@@ -209,6 +209,39 @@ excluding OriDB's unnamed/`null` entries):
 - `origin_matrix_watson[_named].tsv` / `origin_matrix_crick[_named].tsv` —
   the raw origin × bin matrices, for re-analysis without rerunning the script
 
+### `braid_plot.py` — bedGraph → genome-wide strand-ratio "braid plot"
+
+Runs automatically per sample as part of the pipeline (`rule braid_plot`,
+writing to `processed_results/{sample}/`), or standalone:
+
+```bash
+conda activate bio_env
+python braid_plot.py \
+  --forward-bedgraph /path/to/{sample}__forward.bedgraph \
+  --reverse-bedgraph /path/to/{sample}__reverse.bedgraph \
+  --genome-fai /path/to/genome.fa.fai   # optional, defaults to $HYDEN_GENOME + .fa.fai
+  --origins-file or200.txt              # optional, defaults to or200.txt in this repo
+  --output-dir /path/to/output/dir \
+  --bin-size 500                        # optional, defaults to 500bp
+```
+
+Unlike `origin_metaplot.py`, this isn't centered on origins — it bins the
+*entire* genome into fixed-size windows (default 500bp) and plots
+log2(Watson/Crick) per bin as one panel per chromosome, with each origin
+from `--origins-file` marked as a vertical line - matching
+`origin_metaplot.py`'s own Watson/Crick convention. The ratio's sign flips
+across replication origins and termini as the leading/lagging strand
+switches, so plotted as a continuous line it alternates above and below
+zero in a repeating pattern — the "braid" this plot is named for.
+
+- `braid_plot.png` — one horizontal panel per chromosome, each windowed to
+  that chromosome's own length (and drawn at a proportional on-page width,
+  so relative chromosome lengths stay visible at a glance rather than every
+  panel sharing one genome-wide axis); red fill where Watson > Crick, blue
+  where Crick > Watson; dashed vertical lines mark each origin's midpoint
+- `braid_matrix.tsv` — the raw per-bin `chrom, bin_start, watson, crick,
+  log2_watson_crick` values, for re-analysis without rerunning the script
+
 ## AWS deployment
 
 The pipeline also runs on AWS Batch (Fargate), reading input and writing
@@ -222,10 +255,12 @@ this section documents what exists and how to use/rebuild it.
 S3 landing/{sample}/*.fastq[.gz]
         │  (S3 event on upload)
         ▼
-Lambda: hyden-seq-landing-watcher
+Lambda: hyden-seq-landing-watcher (source: lambda/landing_watcher_lambda.py)
   - waits until both _end1 and _end2 exist for {sample}
-  - S3 conditional-write lock (locks/{sample}.lock) so the two
-    near-simultaneous upload events don't both submit a job
+  - DynamoDB conditional update (table hyden-seq-sample-status, key
+    sample_id) so the two near-simultaneous upload events don't both
+    submit a job - only the invocation that flips status to SUBMITTED
+    proceeds
         │  batch:SubmitJob
         ▼
 AWS Batch (queue: hyden-seq-job-queue, job def: hyden-seq-pipeline-job)
@@ -247,6 +282,7 @@ AWS Batch (queue: hyden-seq-job-queue, job def: hyden-seq-pipeline-job)
 |---|---|
 | S3 bucket `kunkel-ribo-data-2026` | All data — see prefixes below |
 | ECR repo `hyden-seq-pipeline` | One combined image (both conda envs) |
+| DynamoDB table `hyden-seq-sample-status` | Landing-watcher idempotency + job status. Partition key `sample_id`; attributes `status` (`PENDING`/`SUBMITTED`/`COMPLETED`/`FAILED`), `job_id`, `mate1_key`, `mate2_key`, `created_at`, `updated_at`. On-demand billing (matches the pipeline's scale-to-zero cost design) |
 
 S3 prefixes:
 
@@ -256,7 +292,6 @@ S3 prefixes:
 | `landing/{sample}/` | Drop zone — upload a sample's paired fastqs here to trigger automatic processing |
 | `processed_raw/{sample}/` | Raw fastqs moved here after a landing-triggered job completes |
 | `output/{sample}/` | Pipeline output, same layout as local `OUT_DIR` |
-| `locks/{sample}.lock` | Landing-watcher idempotency markers (S3 conditional-write locks) |
 
 **Compute**
 
@@ -265,7 +300,7 @@ S3 prefixes:
 | Batch compute environment `hyden-seq-fargate-ce` | Fargate, serverless, scales to zero — no cost when idle, max 16 vCPU |
 | Batch job queue `hyden-seq-job-queue` | |
 | Batch job definition `hyden-seq-pipeline-job` | 8 vCPU / 16GB, command = `[input_uri, output_uri, reference_uri?, processed_raw_uri?]` |
-| Lambda `hyden-seq-landing-watcher` | Triggered by S3 `ObjectCreated` under `landing/`; auto-submits Batch jobs |
+| Lambda `hyden-seq-landing-watcher` | Triggered by S3 `ObjectCreated` under `landing/`; auto-submits Batch jobs. Source: `lambda/landing_watcher_lambda.py` |
 
 **IAM** (each role scoped to only what it needs)
 
@@ -274,9 +309,26 @@ S3 prefixes:
 | `hyden-seq-batch-execution-role` | Pulls the ECR image, writes CloudWatch logs |
 | `hyden-seq-batch-job-role` | Container's own S3 read/write, scoped to the bucket |
 | `hyden-seq-batch-service-role` | Batch's own AWS-managed service role |
-| `hyden-seq-landing-watcher-role` | Lambda's S3 + `batch:SubmitJob` permissions |
+| `hyden-seq-landing-watcher-role` | Lambda's S3 `ListBucket`/`GetObject` on the bucket, `dynamodb:GetItem`/`PutItem`/`UpdateItem` scoped to `hyden-seq-sample-status`, and `batch:SubmitJob` |
 | `hyden-seq-github-actions-ecr-push` | GitHub Actions' OIDC role for CI image builds — ECR push only, this repo's `main` branch only |
 | OIDC provider `token.actions.githubusercontent.com` | Lets GitHub Actions assume the role above without any stored AWS credentials |
+
+> **Rollout status:** live and cleaned up. The DynamoDB table is created,
+> `hyden-seq-landing-watcher-role` has the IAM grants above (the old
+> `s3:PutObject` lock-file permission has been removed), and
+> `lambda/landing_watcher_lambda.py` is deployed as the function's code.
+> Verified end-to-end against a real sample: the fixed code correctly
+> claimed the sample via DynamoDB, submitted a Batch job, and the job
+> succeeded, with output landing in `output/{sample}/` and raw input
+> archived to `processed_raw/{sample}/`. Old `locks/{sample}.lock` objects
+> have been deleted.
+>
+> Two issues only surfaced under this real test, not the moto-based unit
+> tests, since they're AWS API validation rules rather than logic bugs:
+> Batch job names reject characters like `.` (sample names may contain
+> them), and `submit_job` rejects an empty string as a command array
+> element. Both are fixed in `landing_watcher_lambda.py` and covered by
+> regression tests in `lambda/test_landing_watcher_lambda.py`.
 
 ### What's automatic vs manual
 
@@ -366,3 +418,106 @@ docker push 069509443906.dkr.ecr.us-east-1.amazonaws.com/hyden-seq-pipeline:late
 
 New Batch jobs pick up the `:latest` tag automatically — no job definition
 change needed unless resource requirements (vCPU/memory) change.
+
+## Snowflake warehouse
+
+Pipeline bedGraph output also lands in Snowflake, read directly from the
+same S3 bucket the AWS pipeline already writes to — no data duplication,
+no second copy step. This is a practice/portfolio addition on top of the
+pipeline itself (the pipeline's own outputs don't depend on it), demonstrating
+a cross-cloud storage integration pattern: Snowflake (account region
+`AWS_US_WEST_2`) assumes an IAM role in the pipeline's AWS account to read
+S3 directly, rather than data being pushed into Snowflake from the AWS side.
+
+### Architecture
+
+```
+S3 kunkel-ribo-data-2026/output/{sample}/{sample}__forward.bedgraph
+S3 kunkel-ribo-data-2026/output/{sample}/{sample}__reverse.bedgraph
+        │
+        │  read via cross-account IAM role assumption
+        │  (external ID-scoped trust, Snowflake-initiated)
+        ▼
+Snowflake storage integration: HYDEN_S3_INT
+        │
+        ▼
+External stage: HYDEN_SEQ.PIPELINE.HYDEN_OUTPUT_STAGE
+        │  COPY INTO, pattern-matched on *__(forward|reverse).bedgraph
+        │  (not hardcoded to specific sample names - covers any past or
+        │  future pipeline output under output/, no re-run needed)
+        ▼
+HYDEN_SEQ.PIPELINE.BEDGRAPH_SIGNAL_RAW  (landing table, keeps METADATA$FILENAME
+        │                                as src_file for provenance/re-parsing)
+        ▼
+HYDEN_SEQ.PIPELINE.BEDGRAPH_SIGNAL  (view: sample_name/strand parsed out of
+                                      src_file via regex - the queryable table)
+```
+
+### Provisioned resources
+
+| Resource | Notes |
+|---|---|
+| Warehouse `HYDEN_WH` | XSMALL, `AUTO_SUSPEND = 60` / `AUTO_RESUME = TRUE` - zero compute cost while idle, matching the AWS side's scale-to-zero design |
+| Database/schema `HYDEN_SEQ.PIPELINE` | Holds everything below |
+| Storage integration `HYDEN_S3_INT` | `STORAGE_ALLOWED_LOCATIONS` scoped to `s3://kunkel-ribo-data-2026/output/` only - can't reach `landing/`, `reference/`, or `processed_raw/` |
+| File format `BEDGRAPH_TSV` | Tab-delimited, no header row (matches the pipeline's raw `bedtools genomecov` bedGraph output exactly) |
+| External stage `HYDEN_OUTPUT_STAGE` | Points at the storage integration + `output/` prefix |
+| Table `BEDGRAPH_SIGNAL_RAW` | Landing table: `chrom, start_pos, end_pos, score, src_file, loaded_at` |
+| View `BEDGRAPH_SIGNAL` | `sample_name, strand, chrom, start_pos, end_pos, score, loaded_at` - `sample_name`/`strand` parsed from `src_file` via `REGEXP_SUBSTR` |
+
+AWS side, in the pipeline's own account (`069509443906`):
+
+| Resource | Notes |
+|---|---|
+| IAM role `snowflake-hyden-seq-s3-access` | Trust policy allows only Snowflake's generated IAM user (`STORAGE_AWS_IAM_USER_ARN` from `DESC INTEGRATION HYDEN_S3_INT`), conditioned on `sts:ExternalId` matching Snowflake's generated external ID - the standard Snowflake storage-integration security pattern, not a broad cross-account trust |
+| Inline policy `s3-read-output` | `s3:GetObject`/`s3:GetObjectVersion` + prefix-scoped `s3:ListBucket`, both limited to `output/*` - read-only, can't write or touch other prefixes |
+
+### What's automatic vs manual
+
+- **Automatic**: the warehouse suspending/resuming itself; the view staying in sync with whatever's in the landing table
+- **Manual**: re-running `COPY INTO BEDGRAPH_SIGNAL_RAW ...` after a new pipeline run lands new bedGraphs in S3. `COPY INTO` only loads files it hasn't already loaded (tracked via Snowflake's own load history), so it's safe to re-run repeatedly - it just does nothing on files already landed. There's no S3-event-triggered auto-load wired up (the AWS side's Lambda watcher triggers *pipeline runs*, not this load) - a natural next step would be an SNS/SQS-triggered Snowpipe for that, not yet built here
+
+### Cost shape
+
+Nothing runs, and nothing is billed for warehouse compute, while idle -
+`HYDEN_WH` auto-suspends after 60 seconds. Ongoing cost is Snowflake account
+credits only consumed during an actual `COPY INTO` or query (and even those
+are usually a few seconds against XSMALL for this data volume), plus
+whatever Snowflake's own storage cost is for the landed rows - not tracked
+separately from the AWS side's own S3 storage cost, which is unaffected
+(this reads S3, it doesn't copy data out of it).
+
+### Querying
+
+```sql
+USE WAREHOUSE HYDEN_WH;
+USE DATABASE HYDEN_SEQ;
+USE SCHEMA PIPELINE;
+
+SELECT sample_name, strand, COUNT(*) AS bins, SUM(score) AS total_score
+FROM BEDGRAPH_SIGNAL
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```
+
+### Loading new pipeline output
+
+After a new sample's bedGraphs land in `s3://kunkel-ribo-data-2026/output/`:
+
+```sql
+COPY INTO BEDGRAPH_SIGNAL_RAW (chrom, start_pos, end_pos, score, src_file)
+FROM (
+    SELECT $1, $2, $3, $4, METADATA$FILENAME
+    FROM @HYDEN_OUTPUT_STAGE
+)
+PATTERN = '.*__(forward|reverse)\\.bedgraph'
+FILE_FORMAT = BEDGRAPH_TSV;
+```
+
+### Transforming the landed data: `dbt/hyden_seq/`
+
+`BEDGRAPH_SIGNAL_RAW` above is the raw landing table; a small dbt project in
+[`dbt/hyden_seq/`](dbt/hyden_seq/) turns it into a proper staging → marts
+model (source declaration, tests, a SQL-native version of `braid_plot.py`'s
+log2(Watson/Crick) ratio) instead of one hand-written view. See that
+directory's own README for how to run it.
