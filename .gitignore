@@ -9,3 +9,12 @@ lambda/*.zip
 # CDK
 infra/.venv/
 infra/cdk.out/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+terraform/modules/pipeline/.build/
+terraform/modules/pipeline/.terraform.lock.hcl

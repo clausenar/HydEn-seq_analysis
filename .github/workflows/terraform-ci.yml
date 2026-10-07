@@ -1,0 +1,92 @@
+name: Terraform CI
+
+# Checks every change to the Terraform code or the Lambda it deploys: format,
+# validate, lint, security scan and the module tests (mocked AWS provider, so
+# no credentials). If the repository variable TF_PLAN_ROLE_ARN is set (see
+# terraform/bootstrap), pull requests also get a read-only `terraform plan`
+# for dev. Applying stays a deliberate, manual step.
+on:
+  pull_request:
+    paths:
+      - "terraform/**"
+      - "lambda/**"
+      - ".github/workflows/terraform-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "terraform/**"
+      - "lambda/**"
+      - ".github/workflows/terraform-ci.yml"
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.16"
+
+      - name: Format
+        run: terraform fmt -check -recursive
+
+      - name: Validate roots
+        run: |
+          for dir in envs/dev envs/prod bootstrap; do
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+
+      - name: Module tests (mocked AWS)
+        working-directory: terraform/modules/pipeline
+        run: |
+          terraform init -backend=false -input=false
+          terraform test
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: Lint
+        run: |
+          tflint --init --config "$PWD/.tflint.hcl"
+          tflint --recursive --config "$PWD/.tflint.hcl"
+
+      - name: Security scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: terraform
+          config_file: terraform/.checkov.yaml
+
+  plan-dev:
+    if: github.event_name == 'pull_request' && vars.TF_PLAN_ROLE_ARN != ''
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # AWS OIDC
+      contents: read
+    defaults:
+      run:
+        working-directory: terraform/envs/dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.16"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.TF_PLAN_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - run: terraform init -input=false
+      - run: terraform plan -input=false -no-color
