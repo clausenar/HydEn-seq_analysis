@@ -1,0 +1,53 @@
+name: Infrastructure CI
+
+# Checks every change to the infrastructure code or the Lambda it deploys:
+# unit tests for the Lambda, template tests for the CDK stack, and a full
+# `cdk synth`. Nothing here needs AWS credentials or touches the account;
+# deploying stays a deliberate, manual `cdk deploy`.
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - "lambda/**"
+      - ".github/workflows/infra-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "lambda/**"
+      - ".github/workflows/infra-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-synth:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt -r requirements-dev.txt -r ../lambda/requirements-dev.txt
+          npm install -g aws-cdk
+
+      - name: Lambda unit tests (moto)
+        run: .venv/bin/python -m pytest -q ../lambda
+
+      - name: CDK template tests
+        run: .venv/bin/python -m pytest -q tests
+
+      - name: CDK synth
+        run: cdk synth --quiet

@@ -1,0 +1,17 @@
+{
+  "app": ".venv/bin/python app.py",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "cdk*.json", "requirements*.txt", "tests", ".venv", "**/__pycache__"]
+  },
+  "context": {
+    "availability-zones:account=069509443906:region=us-east-1": [
+      "us-east-1a",
+      "us-east-1b",
+      "us-east-1c",
+      "us-east-1d",
+      "us-east-1e",
+      "us-east-1f"
+    ]
+  }
+}
