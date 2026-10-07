@@ -1,0 +1,38 @@
+version: 2
+
+models:
+  - name: stg_bedgraph_signal
+    description: One row per pileup position, per sample, per strand.
+    columns:
+      - name: sample_name
+        tests:
+          - not_null
+      - name: strand
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["forward", "reverse"]
+      - name: chrom
+        tests:
+          - not_null
+      - name: start_pos
+        tests:
+          - not_null
+      - name: score
+        tests:
+          - not_null
+      - name: loaded_at
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - sample_name
+              - strand
+              - chrom
+              - start_pos
+      - dbt_utils.expression_is_true:
+          arguments:
+            expression: "score >= 0"

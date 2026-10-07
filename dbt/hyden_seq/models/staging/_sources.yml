@@ -1,0 +1,48 @@
+version: 2
+
+sources:
+  - name: pipeline
+    database: HYDEN_SEQ
+    schema: PIPELINE
+    description: >
+      Raw landing tables loaded directly from the pipeline's S3 output
+      (see the main repo's Snowflake warehouse section) via the
+      HYDEN_S3_INT storage integration - not managed by dbt.
+    tables:
+      - name: bedgraph_signal_raw
+        description: >
+          One row per (chrom, position) pileup entry from every
+          {sample}__forward.bedgraph / {sample}__reverse.bedgraph the
+          pipeline has produced, loaded via a pattern-matched COPY INTO.
+          sample_name and strand aren't columns in the source file itself -
+          they're encoded in the S3 path, captured here as src_file via
+          METADATA$FILENAME and parsed out in stg_bedgraph_signal.
+        columns:
+          - name: chrom
+            description: Chromosome name (roman-numeral sacCer3 convention, e.g. chrI)
+          - name: start_pos
+            description: 0-based interval start
+          - name: end_pos
+            description: 0-based interval end (exclusive)
+          - name: score
+            description: Ribonucleotide pileup count at this position
+          - name: src_file
+            description: Full S3 path the row was loaded from
+          - name: loaded_at
+            description: When COPY INTO landed this row
+
+      - name: chrom_sizes
+        description: sacCer3 chromosome lengths, from the genome's .fa.fai index - loaded once, not pipeline output.
+        columns:
+          - name: chrom
+          - name: length
+
+      - name: origins
+        description: >
+          Replication origin midpoints (OriDB, or200.txt), arabic chr1..chr16
+          names mapped to the roman-numeral chrI..chrXVI convention the
+          bedGraphs use - matches braid_plot.py's own CHROM_MAP. Loaded once,
+          not pipeline output.
+        columns:
+          - name: chrom
+          - name: midpoint

@@ -1,0 +1,78 @@
+version: 2
+
+models:
+  - name: bedgraph_signal_summary
+    description: Per-sample, per-strand, per-chromosome totals.
+    columns:
+      - name: sample_name
+        tests:
+          - not_null
+      - name: total_score
+        tests:
+          - not_null
+
+  - name: braid_ratio_binned
+    description: >
+      SQL-native equivalent of braid_plot.py's log2(Watson/Crick) ratio,
+      binned genome-wide. bin_start step size is set by the bin_size dbt
+      var at build time (default 500, matching the script's own default).
+    columns:
+      - name: sample_name
+        tests:
+          - not_null
+      - name: log2_watson_crick
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - sample_name
+              - chrom
+              - bin_start
+
+  - name: origin_signal_binned
+    description: >
+      SQL-native equivalent of origin_metaplot.py's per-origin windowing:
+      one row per (origin, sample, strand, relative bin), signal summed
+      within that bin. window/bin_start step size are set by the
+      origin_window / origin_bin_size dbt vars at build time (defaults
+      2000bp / 50bp, matching the script's own defaults).
+    columns:
+      - name: origin_id
+        tests:
+          - not_null
+      - name: sample_name
+        tests:
+          - not_null
+      - name: score_sum
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - origin_id
+              - sample_name
+              - strand
+              - bin_start
+
+  - name: braid_ratio_binned_5bp
+    description: >
+      Same as braid_ratio_binned, fixed at a 5bp bin size and materialized
+      as a view instead of a table - for zooming into one region rather
+      than scanning genome-wide.
+    columns:
+      - name: sample_name
+        tests:
+          - not_null
+      - name: log2_watson_crick
+        tests:
+          - not_null
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - sample_name
+              - chrom
+              - bin_start
