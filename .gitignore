@@ -2,3 +2,10 @@
 .snakemake/
 dump.tmp
 *_dump.tmp
+__pycache__/
+lambda/*.zip
+.pytest_cache/
+
+# CDK
+infra/.venv/
+infra/cdk.out/
