@@ -54,6 +54,19 @@ cdk destroy -c stage=dev --profile ec2-pipeline
 The first deploy to the account needs a one-time `cdk bootstrap aws://069509443906/us-east-1 --profile ec2-pipeline`.
 Before a dev test run, copy `reference/` from the live bucket into the dev bucket.
 
+## Verified end to end (2026-10-07)
+
+A `dev` copy was deployed next to the live pipeline (`cdk deploy`, ~2 min), and one
+paired sample (`Kunkel_Ribo-seq_Pol2MGrnh201.1b.1`, 2 × 3.7 MB fastq) was uploaded to its `landing/`:
+
+1. The S3 event triggered the landing watcher, which claimed the sample in DynamoDB
+   (status `SUBMITTED`) and submitted exactly one Batch job.
+2. The Fargate job ran Snakemake (~50 s of compute) and succeeded with exit code 0.
+3. Output landed in `output/{sample}/` and the raw fastqs moved to `processed_raw/{sample}/`.
+4. The forward and reverse bedGraphs and `base_count_totals.txt` were **byte-for-byte identical**
+   to the live pipeline's output for the same sample.
+5. `cdk destroy` removed the stack, bucket and table; the live resources were untouched.
+
 ## CI
 
 `.github/workflows/infra-ci.yml` runs the Lambda unit tests, the CDK template
