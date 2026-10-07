@@ -50,6 +50,32 @@ own default) and can be overridden per run:
 dbt run --select braid_ratio_binned --vars '{bin_size: 50}'
 ```
 
+## Access: least-privilege role
+
+dbt connects as `HYDEN_DBT_ROLE` (set as `role:` in `profiles.yml`), not
+`ACCOUNTADMIN`. The role is created by [`admin/hyden_dbt_role.sql`](admin/hyden_dbt_role.sql),
+run once as `ACCOUNTADMIN`. It can only:
+
+| Scope | Privilege |
+|---|---|
+| Warehouse `HYDEN_WH` | `USAGE` |
+| Database `HYDEN_SEQ` | `USAGE`, `CREATE SCHEMA` |
+| Schema `PIPELINE` (sources) | `USAGE`, `SELECT` on all and future tables and views: read-only |
+| Schemas `ANALYTICS_STAGING`, `ANALYTICS_MARTS` | Owner of the schemas and every object in them, so `dbt build` can replace its own models |
+
+It is granted to `SYSADMIN`, so admins still see everything it owns.
+
+**Secondary roles.** The Snowflake user has `DEFAULT_SECONDARY_ROLES = ALL`,
+so any session would also carry `ACCOUNTADMIN` as a secondary role and the
+restrictions above would not apply. `dbt_project.yml` turns them off with an
+`on-run-start` hook and a model `pre-hook` (`use secondary roles none`), so
+dbt runs with `HYDEN_DBT_ROLE` alone. Other sessions (e.g. Snowsight) are
+unaffected.
+
+Verified on 2026-10-07: `dbt build` passes (5 models, 21 tests) as
+`HYDEN_DBT_ROLE`; with secondary roles off, the role cannot create tables in
+or delete from `PIPELINE`, and cannot create roles.
+
 ## Why this exists
 
 The pipeline itself doesn't depend on any of this - it's a practice/portfolio
