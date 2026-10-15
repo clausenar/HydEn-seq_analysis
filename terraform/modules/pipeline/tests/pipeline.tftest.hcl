@@ -301,6 +301,13 @@ run "container_can_read_write_its_bucket_only" {
     ]), "s3:DeleteObject")
     error_message = "`aws s3 mv` to processed_raw/ needs DeleteObject."
   }
+
+  assert {
+    condition = length(setsubtract(["s3:GetObjectTagging", "s3:PutObjectTagging"], flatten([
+      for s in jsondecode(aws_iam_role_policy.batch_job.policy).Statement : s.Action
+    ]))) == 0
+    error_message = "`aws s3 mv` of a FASTQ over 8 MB copies tags, so it needs Get/PutObjectTagging."
+  }
 }
 
 # ---------------------------------------------------------------- alerting

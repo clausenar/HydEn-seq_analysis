@@ -71,9 +71,15 @@ resource "aws_iam_role_policy" "batch_job" {
         Resource = [aws_s3_bucket.data.arn]
       },
       {
-        Sid      = "ReadWriteObjects"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
+        # The tagging actions are for `aws s3 mv`: a file over the CLI's 8 MB
+        # multipart threshold is copied part by part, and the CLI reads the
+        # source's tags and writes them on the copy.
+        Sid    = "ReadWriteObjects"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload",
+          "s3:GetObjectTagging", "s3:PutObjectTagging",
+        ]
         Resource = ["${aws_s3_bucket.data.arn}/*"]
       },
     ]
