@@ -89,4 +89,9 @@ jobs:
           aws-region: us-east-1
 
       - run: terraform init -input=false
+      # The alert email is not committed; without it the plan would show the
+      # SNS email subscription being destroyed. A secret, not a variable,
+      # because the repository is public and secrets are masked in logs.
       - run: terraform plan -input=false -no-color
+        env:
+          TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}

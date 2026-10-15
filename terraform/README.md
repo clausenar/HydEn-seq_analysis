@@ -77,7 +77,8 @@ against `mock_provider "aws"`, so it creates nothing and needs no credentials.
 and `checkov`. Checks deliberately skipped are listed with reasons in
 [`.checkov.yaml`](.checkov.yaml). Set the repository variable `TF_PLAN_ROLE_ARN`
 (output of `bootstrap`) to also get a read-only `terraform plan` for dev on each
-pull request. Applying stays manual.
+pull request, and the repository secret `ALERT_EMAIL` so that plan does not show
+the alert email subscription being destroyed. Applying stays manual.
 
 ## Differences from the CDK version
 

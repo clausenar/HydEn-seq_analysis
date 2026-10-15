@@ -4,7 +4,8 @@ resource "aws_sns_topic" "alerts" {
 }
 
 resource "aws_sns_topic_subscription" "email" {
-  count = var.alert_email == null ? 0 : 1
+  # "" counts as unset: CI passes an empty string when the secret is missing.
+  count = var.alert_email == null || var.alert_email == "" ? 0 : 1
 
   topic_arn = aws_sns_topic.alerts.arn
   protocol  = "email"
