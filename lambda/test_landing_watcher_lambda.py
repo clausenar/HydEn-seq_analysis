@@ -155,6 +155,8 @@ class TestHandler:
         ]
         # Batch's submit_job API rejects an empty-string command element outright.
         assert all(part for part in command)
+        # Echoed back in the job state change event; see TestRecordJobResult.
+        assert call_kwargs["parameters"] == {"sample_id": "sampleA"}
 
         item = landing_watcher.TABLE.get_item(Key={"sample_id": "sampleA"})["Item"]
         assert item["status"] == "SUBMITTED"
@@ -199,3 +201,61 @@ class TestHandler:
         landing_watcher.handler(s3_event(BUCKET, "landing/sampleD/sampleD_end2.fastq"), None)
 
         mock_batch.submit_job.assert_called_once()
+
+
+def batch_event(job_id, sample, status, reason="Essential container in task exited"):
+    """Shape of an EventBridge "Batch Job State Change" event, trimmed to the
+    fields the handler reads."""
+    detail = {"jobId": job_id, "status": status, "statusReason": reason}
+    if sample is not None:
+        detail["parameters"] = {"sample_id": sample}
+    return {"source": "aws.batch", "detail-type": "Batch Job State Change", "detail": detail}
+
+
+class TestRecordJobResult:
+    def _submitted(self, sample, job_id):
+        landing_watcher.TABLE.put_item(Item={"sample_id": sample, "status": "SUBMITTED", "job_id": job_id})
+
+    def _item(self, sample):
+        return landing_watcher.TABLE.get_item(Key={"sample_id": sample})["Item"]
+
+    def test_succeeded_job_is_recorded(self):
+        self._submitted("s1", "job-1")
+        landing_watcher.handler(batch_event("job-1", "s1", "SUCCEEDED", reason=""), None)
+        item = self._item("s1")
+        assert item["status"] == "SUCCEEDED"
+        assert "updated_at" in item
+
+    def test_failed_job_is_recorded_with_reason(self):
+        self._submitted("s1", "job-1")
+        landing_watcher.handler(batch_event("job-1", "s1", "FAILED"), None)
+        item = self._item("s1")
+        assert item["status"] == "FAILED"
+        assert item["status_reason"] == "Essential container in task exited"
+
+    def test_failed_sample_can_be_claimed_again(self):
+        # The bug this fixes: the record used to stay SUBMITTED forever, so
+        # re-uploading a failed sample never resubmitted it.
+        self._submitted("s1", "job-1")
+        landing_watcher.handler(batch_event("job-1", "s1", "FAILED"), None)
+        assert landing_watcher._try_claim("s1") is True
+
+    def test_older_job_does_not_overwrite_a_resubmission(self):
+        self._submitted("s1", "job-2")
+        landing_watcher.handler(batch_event("job-1", "s1", "FAILED"), None)
+        item = self._item("s1")
+        assert item["status"] == "SUBMITTED"
+        assert item["job_id"] == "job-2"
+
+    def test_unknown_sample_does_not_create_a_record(self):
+        landing_watcher.handler(batch_event("job-1", "never-claimed", "SUCCEEDED"), None)
+        assert "Item" not in landing_watcher.TABLE.get_item(Key={"sample_id": "never-claimed"})
+
+    def test_job_without_sample_parameter_is_ignored(self):
+        # Jobs submitted before the sample_id parameter existed.
+        landing_watcher.handler(batch_event("job-1", None, "FAILED"), None)
+
+    def test_non_final_status_is_ignored(self):
+        self._submitted("s1", "job-1")
+        landing_watcher.handler(batch_event("job-1", "s1", "RUNNING"), None)
+        assert self._item("s1")["status"] == "SUBMITTED"

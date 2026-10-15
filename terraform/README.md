@@ -14,6 +14,7 @@ S3 landing/{sample}/*.fastq ──(ObjectCreated)──► Lambda landing watche
                      S3 output/{sample}/   +   raw input archived to processed_raw/{sample}/
 
 Failed Batch job ──► EventBridge ──► SNS alert      Lambda errors ──► CloudWatch alarm ──► SNS alert
+Finished Batch job ──► EventBridge ──► landing watcher ──► DynamoDB status SUCCEEDED / FAILED
 ```
 
 ## Layout
@@ -24,7 +25,7 @@ terraform/
     storage.tf             S3 data bucket (private, encrypted, HTTPS only, lifecycle) + DynamoDB status table
     network.tf             VPC, 2 public subnets, no NAT gateway, free S3 gateway endpoint
     batch.tf               Fargate compute environment, job queue, job definition
-    lambda.tf              landing watcher (zipped from ../lambda), S3 trigger on landing/ only
+    lambda.tf              landing watcher (zipped from ../lambda), S3 trigger on landing/ only, job-finished rule
     iam.tf                 least-privilege roles, written out in full
     alerting.tf            SNS topic, EventBridge rule for failed jobs, Lambda error alarm
     tests/                 `terraform test` suite (mocked AWS provider)

@@ -282,7 +282,7 @@ AWS Batch (queue: hyden-seq-job-queue, job def: hyden-seq-pipeline-job)
 |---|---|
 | S3 bucket `kunkel-ribo-data-2026` | All data — see prefixes below |
 | ECR repo `hyden-seq-pipeline` | One combined image (both conda envs) |
-| DynamoDB table `hyden-seq-sample-status` | Landing-watcher idempotency + job status. Partition key `sample_id`; attributes `status` (`PENDING`/`SUBMITTED`/`COMPLETED`/`FAILED`), `job_id`, `mate1_key`, `mate2_key`, `created_at`, `updated_at`. On-demand billing (matches the pipeline's scale-to-zero cost design) |
+| DynamoDB table `hyden-seq-sample-status` | Landing-watcher idempotency + job status. Partition key `sample_id`; attributes `status` (`SUBMITTED`, then `SUCCEEDED`/`FAILED` from the Batch job state change event), `status_reason`, `job_id`, `mate1_key`, `mate2_key`, `created_at`, `updated_at`. On-demand billing (matches the pipeline's scale-to-zero cost design) |
 
 S3 prefixes:
 

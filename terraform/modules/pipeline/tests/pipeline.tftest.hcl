@@ -338,6 +338,37 @@ run "failed_jobs_are_alerted" {
   }
 }
 
+run "finished_jobs_update_the_status_table" {
+  assert {
+    condition = jsondecode(aws_cloudwatch_event_rule.job_finished.event_pattern) == {
+      source      = ["aws.batch"]
+      detail-type = ["Batch Job State Change"]
+      detail      = { status = ["SUCCEEDED", "FAILED"], jobQueue = [aws_batch_job_queue.this.arn] }
+    }
+    error_message = "Succeeded and failed jobs on this queue must reach the watcher, or the status stays SUBMITTED."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_event_target.job_finished_to_watcher.arn == aws_lambda_function.landing_watcher.arn
+    error_message = "The job-finished rule must invoke the landing watcher."
+  }
+
+  assert {
+    condition = (
+      aws_lambda_permission.events_invoke.principal == "events.amazonaws.com" &&
+      aws_lambda_permission.events_invoke.source_arn == aws_cloudwatch_event_rule.job_finished.arn
+    )
+    error_message = "Only the job-finished rule may invoke the watcher through EventBridge."
+  }
+
+  assert {
+    condition = contains(flatten([
+      for s in jsondecode(aws_iam_role_policy.landing_watcher.policy).Statement : s.Action
+    ]), "dynamodb:UpdateItem")
+    error_message = "Recording the result needs dynamodb:UpdateItem."
+  }
+}
+
 run "alert_email_is_optional" {
   assert {
     condition     = length(aws_sns_topic_subscription.email) == 0

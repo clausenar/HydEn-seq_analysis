@@ -59,3 +59,32 @@ resource "aws_s3_bucket_notification" "landing" {
 
   depends_on = [aws_lambda_permission.s3_invoke]
 }
+
+# Finished jobs on this queue go back to the watcher, which writes SUCCEEDED
+# or FAILED to the sample's status record. Without this the record stays
+# SUBMITTED and a failed sample can never be claimed again.
+resource "aws_cloudwatch_event_rule" "job_finished" {
+  name        = "${local.name}-job-finished"
+  description = "Record the final status of each HydEn-seq Batch job"
+  event_pattern = jsonencode({
+    source      = ["aws.batch"]
+    detail-type = ["Batch Job State Change"]
+    detail = {
+      status   = ["SUCCEEDED", "FAILED"]
+      jobQueue = [aws_batch_job_queue.this.arn]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "job_finished_to_watcher" {
+  rule = aws_cloudwatch_event_rule.job_finished.name
+  arn  = aws_lambda_function.landing_watcher.arn
+}
+
+resource "aws_lambda_permission" "events_invoke" {
+  statement_id  = "AllowJobFinishedRule"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.landing_watcher.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.job_finished.arn
+}

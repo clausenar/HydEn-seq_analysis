@@ -225,6 +225,24 @@ class HydenSeqPipelineStack(Stack):
             s3.NotificationKeyFilter(prefix=LANDING_PREFIX),
         )
 
+        # Finished jobs on this queue go back to the watcher, which writes
+        # SUCCEEDED or FAILED to the sample's status record. Without this the
+        # record stays SUBMITTED and a failed sample can never be claimed again.
+        events.Rule(
+            self,
+            "JobFinishedRule",
+            description="Record the final status of each HydEn-seq Batch job",
+            event_pattern=events.EventPattern(
+                source=["aws.batch"],
+                detail_type=["Batch Job State Change"],
+                detail={
+                    "status": ["SUCCEEDED", "FAILED"],
+                    "jobQueue": [self.job_queue.job_queue_arn],
+                },
+            ),
+            targets=[targets.LambdaFunction(self.landing_watcher)],
+        )
+
         # ---------------------------------------------------------------- alerting
         self.alerts = sns.Topic(self, "PipelineAlerts", display_name=f"HydEn-seq {stage} alerts")
         if alert_email:

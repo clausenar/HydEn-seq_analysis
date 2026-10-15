@@ -202,6 +202,30 @@ def test_container_can_read_write_its_bucket_only(dev):
     assert not any(a.split(":")[0] not in {"s3"} for a in actions)
 
 
+def test_finished_jobs_update_the_status_table(dev):
+    dev.has_resource_properties(
+        "AWS::Events::Rule",
+        {
+            "EventPattern": Match.object_like(
+                {
+                    "source": ["aws.batch"],
+                    "detail-type": ["Batch Job State Change"],
+                    "detail": Match.object_like({"status": ["SUCCEEDED", "FAILED"]}),
+                }
+            ),
+            "Targets": [
+                Match.object_like(
+                    {"Arn": {"Fn::GetAtt": [Match.string_like_regexp("^LandingWatcher"), "Arn"]}}
+                )
+            ],
+        },
+    )
+    dev.has_resource_properties(
+        "AWS::Lambda::Permission",
+        {"Principal": "events.amazonaws.com", "Action": "lambda:InvokeFunction"},
+    )
+
+
 # ----------------------------------------------------------------- alerting
 def test_failed_jobs_are_alerted(dev):
     dev.has_resource_properties(
