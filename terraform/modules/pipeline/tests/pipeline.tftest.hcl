@@ -389,6 +389,27 @@ run "alert_email_subscribes_when_given" {
 
 # --------------------------------------------------------------- variables
 
+run "image_digest_pins_the_job_to_one_image" {
+  variables {
+    image_digest = "sha256:5e0cf4728bd7dcb68cc11a1a768504c2aac47fa77901d34bdffbaad3ee64f0c6"
+  }
+
+  assert {
+    condition     = jsondecode(aws_batch_job_definition.pipeline.container_properties).image == "123456789012.dkr.ecr.us-east-1.amazonaws.com/hyden-seq-pipeline@sha256:5e0cf4728bd7dcb68cc11a1a768504c2aac47fa77901d34bdffbaad3ee64f0c6"
+    error_message = "With image_digest set, the job must run that exact image, not a tag."
+  }
+}
+
+run "rejects_an_invalid_image_digest" {
+  command = plan
+
+  variables {
+    image_digest = "latest"
+  }
+
+  expect_failures = [var.image_digest]
+}
+
 run "rejects_an_invalid_stage_name" {
   command = plan
 
