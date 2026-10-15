@@ -246,8 +246,17 @@ zero in a repeating pattern — the "braid" this plot is named for.
 
 The pipeline also runs on AWS Batch (Fargate), reading input and writing
 output through S3, in AWS account `069509443906` (`us-east-1`, profile
-`ec2-pipeline` locally). Everything below is already provisioned and live —
-this section documents what exists and how to use/rebuild it.
+`ec2-pipeline` locally).
+
+Since 2026-10-15 the live pipeline is the Terraform `prod` stage
+([`terraform/`](terraform/README.md), `envs/prod`): bucket
+`hyden-seq-prod-data-49d313619a5b9de291931f8e93`, and every other resource named
+`hyden-seq-prod-…`. A `dev` copy (`hyden-seq-dev-…`) runs next to it for testing.
+The pipeline was first provisioned by hand on the bucket `kunkel-ribo-data-2026`;
+those resources are listed under [Original hand-built
+resources](#original-hand-built-resources-being-retired) and are being retired.
+Their `reference/`, `output/` and `processed_raw/` data has been copied to the
+prod bucket. Don't upload new samples to the old bucket.
 
 ### Architecture
 
@@ -255,16 +264,16 @@ this section documents what exists and how to use/rebuild it.
 S3 landing/{sample}/*.fastq[.gz]
         │  (S3 event on upload)
         ▼
-Lambda: hyden-seq-landing-watcher (source: lambda/landing_watcher_lambda.py)
+Lambda: hyden-seq-prod-landing-watcher (source: lambda/landing_watcher_lambda.py)
   - waits until both _end1 and _end2 exist for {sample}
-  - DynamoDB conditional update (table hyden-seq-sample-status, key
+  - DynamoDB conditional update (table hyden-seq-prod-sample-status, key
     sample_id) so the two near-simultaneous upload events don't both
     submit a job - only the invocation that flips status to SUBMITTED
     proceeds
         │  batch:SubmitJob
         ▼
-AWS Batch (queue: hyden-seq-job-queue, job def: hyden-seq-pipeline-job)
-  Fargate task running the hyden-seq-pipeline:latest image (ECR)
+AWS Batch (queue: hyden-seq-prod-queue, job def: hyden-seq-prod-pipeline)
+  Fargate task running the hyden-seq-pipeline image (ECR), pinned by digest in prod
   docker/batch_entrypoint.sh:
     1. sync s3://.../reference/        → /data/reference  (genome, oligo index, or200.txt)
     2. sync s3://.../landing/{sample}/ → /data/raw
@@ -272,9 +281,15 @@ AWS Batch (queue: hyden-seq-job-queue, job def: hyden-seq-pipeline-job)
     4. snakemake --cores 8
     5. sync /data/output → s3://.../output/{sample}/
     6. move s3://.../landing/{sample}/ → s3://.../processed_raw/{sample}/
+        │  EventBridge: Batch job SUCCEEDED / FAILED
+        ▼
+Lambda writes the final status to the DynamoDB table; FAILED also alerts via SNS
 ```
 
-### Provisioned resources
+### Original hand-built resources (being retired)
+
+What was provisioned by hand before the Terraform stages existed. It still
+exists until it is retired, but new samples go to the prod bucket.
 
 **Storage**
 
@@ -313,7 +328,7 @@ S3 prefixes:
 | `hyden-seq-github-actions-ecr-push` | GitHub Actions' OIDC role for CI image builds — ECR push only, this repo's `main` branch only |
 | OIDC provider `token.actions.githubusercontent.com` | Lets GitHub Actions assume the role above without any stored AWS credentials |
 
-> **Rollout status:** live and cleaned up. The DynamoDB table is created,
+> **Rollout status (September 2026, hand-built pipeline):** live and cleaned up. The DynamoDB table is created,
 > `hyden-seq-landing-watcher-role` has the IAM grants above (the old
 > `s3:PutObject` lock-file permission has been removed), and
 > `lambda/landing_watcher_lambda.py` is deployed as the function's code.
@@ -348,8 +363,8 @@ minutes stay comfortably inside the free tier at any normal usage frequency.
 ### Using the landing zone (fully automatic)
 
 ```bash
-aws s3 cp my_sample_end1.fastq s3://kunkel-ribo-data-2026/landing/my_sample/my_sample_end1.fastq --profile ec2-pipeline
-aws s3 cp my_sample_end2.fastq s3://kunkel-ribo-data-2026/landing/my_sample/my_sample_end2.fastq --profile ec2-pipeline
+aws s3 cp my_sample_end1.fastq s3://hyden-seq-prod-data-49d313619a5b9de291931f8e93/landing/my_sample/my_sample_end1.fastq --profile ec2-pipeline
+aws s3 cp my_sample_end2.fastq s3://hyden-seq-prod-data-49d313619a5b9de291931f8e93/landing/my_sample/my_sample_end2.fastq --profile ec2-pipeline
 ```
 
 That's it — the Lambda picks up the second upload, submits a Batch job once
@@ -357,8 +372,9 @@ both mates are present, and the raw files end up in `processed_raw/my_sample/`
 once it succeeds. Watch progress via:
 
 ```bash
-aws logs tail /aws/lambda/hyden-seq-landing-watcher --since 5m --profile ec2-pipeline
-aws batch list-jobs --job-queue hyden-seq-job-queue --job-status RUNNING --profile ec2-pipeline
+aws logs tail /aws/lambda/hyden-seq-prod-landing-watcher --since 5m --profile ec2-pipeline
+aws batch list-jobs --job-queue hyden-seq-prod-queue --job-status RUNNING --profile ec2-pipeline
+aws dynamodb get-item --table-name hyden-seq-prod-sample-status --key '{"sample_id":{"S":"my_sample"}}' --profile ec2-pipeline
 ```
 
 ### Submitting a job manually
@@ -369,14 +385,16 @@ in S3 somewhere else:
 ```bash
 aws batch submit-job --profile ec2-pipeline --region us-east-1 \
   --job-name hyden-seq-my-sample \
-  --job-queue hyden-seq-job-queue \
-  --job-definition hyden-seq-pipeline-job \
-  --container-overrides '{"command":["s3://kunkel-ribo-data-2026/some/input/prefix/","s3://kunkel-ribo-data-2026/output/my_sample/"]}'
+  --job-queue hyden-seq-prod-queue \
+  --job-definition hyden-seq-prod-pipeline \
+  --container-overrides '{"command":["s3://hyden-seq-prod-data-49d313619a5b9de291931f8e93/some/input/prefix/","s3://hyden-seq-prod-data-49d313619a5b9de291931f8e93/output/my_sample/","s3://hyden-seq-prod-data-49d313619a5b9de291931f8e93/reference/"]}'
 ```
 
-The command list is `[input_uri, output_uri]`, with two optional trailing
-args: a reference-data URI (defaults to `s3://kunkel-ribo-data-2026/reference/`)
-and a processed-raw destination URI (if omitted, raw input is left in place).
+The command list is `[input_uri, output_uri, reference_uri]`, plus an optional
+processed-raw destination URI (if omitted, raw input is left in place). The
+reference URI has no default: each stage reads its own bucket's `reference/`.
+A job submitted this way has no `sample_id` parameter, so its status is not
+recorded in the DynamoDB table.
 
 ### Rebuilding and redeploying the image
 
@@ -394,9 +412,11 @@ this repo's `main` branch and ECR push on this one repository — no AWS keys
 stored in GitHub), and uses GitHub Actions' cache backend for Docker layers,
 so only the final `git clone` layer actually rebuilds on most runs rather
 than reinstalling both conda environments from scratch. This is decoupled
-from job execution: Batch jobs always run whatever image currently has the
-`:latest` tag, regardless of how often data lands in the S3 landing zone or
-how many jobs run — only a code change on `main` triggers a rebuild.
+from job execution: only a code change on `main` triggers a rebuild,
+regardless of how often data lands in the S3 landing zone or how many jobs
+run. The `dev` stage runs whatever image currently has the `:latest` tag;
+`prod` is pinned to one image digest (see [Releasing an image to
+prod](#releasing-an-image-to-prod)).
 
 To trigger a rebuild without a code change (e.g. after editing the workflow
 itself), use **Actions → Build and push pipeline image → Run workflow** on
@@ -416,10 +436,27 @@ docker tag hyden-seq-pipeline:latest 069509443906.dkr.ecr.us-east-1.amazonaws.co
 docker push 069509443906.dkr.ecr.us-east-1.amazonaws.com/hyden-seq-pipeline:latest
 ```
 
-New Batch jobs pick up the `:latest` tag automatically — no job definition
+New `dev` jobs pick up the `:latest` tag automatically — no job definition
 change needed unless resource requirements (vCPU/memory) change.
 
+### Releasing an image to prod
+
+Prod does not follow `:latest`: every merge to `main` pushes a new `:latest`
+and the repository's tags are mutable, so prod runs one exact image digest.
+
+1. Merge the change; the image workflow pushes the new `:latest`.
+2. Test it in dev: upload a sample to the dev bucket's `landing/`.
+3. Copy the digest from the workflow run's summary into `image_digest` in
+   `terraform/envs/prod/main.tf`, open a PR, and after merging run
+   `terraform apply` in `terraform/envs/prod`.
+
 ## Snowflake warehouse
+
+> **Still reads the original bucket.** `HYDEN_S3_INT`, `HYDEN_OUTPUT_STAGE`
+> and the IAM role `snowflake-hyden-seq-s3-access` point at
+> `kunkel-ribo-data-2026/output/`. Samples processed by the prod stage write
+> their bedGraphs to the prod bucket, which Snowflake can't read until the
+> integration, stage and role are pointed at it.
 
 Pipeline bedGraph output also lands in Snowflake, read directly from the
 same S3 bucket the AWS pipeline already writes to — no data duplication,
