@@ -36,7 +36,10 @@ resource "aws_batch_job_definition" "pipeline" {
   # The Lambda passes [input, output, reference, processed_raw] S3 URIs as the
   # command; the image's entrypoint is docker/batch_entrypoint.sh.
   container_properties = jsonencode({
-    image            = "${data.aws_ecr_repository.pipeline.repository_url}:${var.image_tag}"
+    image = (var.image_digest == null
+      ? "${data.aws_ecr_repository.pipeline.repository_url}:${var.image_tag}"
+      : "${data.aws_ecr_repository.pipeline.repository_url}@${var.image_digest}"
+    )
     jobRoleArn       = aws_iam_role.batch_job.arn
     executionRoleArn = aws_iam_role.batch_execution.arn
     resourceRequirements = [

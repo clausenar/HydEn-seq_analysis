@@ -15,9 +15,22 @@ variable "ecr_repository_name" {
 }
 
 variable "image_tag" {
-  description = "Image tag the Batch job definition runs."
+  description = "Image tag the Batch job definition runs. Ignored when image_digest is set."
   type        = string
   default     = "latest"
+}
+
+# CI pushes every merge to main as :latest and the repository's tags are
+# mutable, so a tag can't hold a stage on a tested image. A digest can.
+variable "image_digest" {
+  description = "Optional image digest (sha256:...) to run instead of image_tag; pins the stage to one exact image."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.image_digest == null || can(regex("^sha256:[0-9a-f]{64}$", var.image_digest))
+    error_message = "image_digest must be sha256: followed by 64 lowercase hex characters."
+  }
 }
 
 variable "alert_email" {

@@ -1,11 +1,12 @@
 name: Build and push pipeline image
 
 # Rebuilds the AWS Batch container image whenever pipeline code changes on
-# main, and pushes it to ECR as :latest. Batch jobs always run whatever
-# image currently has that tag - this workflow is what keeps it in sync
-# with the code, decoupled from actual job runs (see docker/Dockerfile,
-# which git-clones this repo at build time rather than copying a local
-# checkout).
+# main, and pushes it to ECR as :latest. Stages that follow :latest (dev)
+# run whatever image currently has that tag - this workflow is what keeps
+# it in sync with the code, decoupled from actual job runs (see
+# docker/Dockerfile, which git-clones this repo at build time rather than
+# copying a local checkout). Prod is pinned to an image digest instead; the
+# digest is printed in the run summary for copying into terraform/envs/prod.
 on:
   push:
     branches: [main]
@@ -43,6 +44,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: docker
           file: docker/Dockerfile
@@ -53,3 +55,13 @@ jobs:
             GIT_REF=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Print the image digest
+        run: |
+          {
+            echo "### Pipeline image"
+            echo "Built from \`${GITHUB_SHA::7}\`. To release it to prod after testing in dev, set this in \`terraform/envs/prod/main.tf\`:"
+            echo '```hcl'
+            echo "image_digest = \"${{ steps.build.outputs.digest }}\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
