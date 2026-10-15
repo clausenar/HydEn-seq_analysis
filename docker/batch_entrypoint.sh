@@ -2,9 +2,12 @@
 set -euo pipefail
 export PATH="/opt/conda/bin:$PATH"
 
-S3_INPUT_PREFIX="${1:?Usage: batch_entrypoint.sh s3://input-prefix/ s3://output-prefix/ [s3://reference-prefix/] [s3://processed-raw-prefix/]}"
-S3_OUTPUT_PREFIX="${2:?Usage: batch_entrypoint.sh s3://input-prefix/ s3://output-prefix/ [s3://reference-prefix/] [s3://processed-raw-prefix/]}"
-S3_REFERENCE_PREFIX="${3:-s3://kunkel-ribo-data-2026/reference/}"
+USAGE="Usage: batch_entrypoint.sh s3://input-prefix/ s3://output-prefix/ s3://reference-prefix/ [s3://processed-raw-prefix/]"
+S3_INPUT_PREFIX="${1:?$USAGE}"
+S3_OUTPUT_PREFIX="${2:?$USAGE}"
+# Required, with no default: each stage has its own bucket, and a default
+# naming one of them would quietly read another stage's reference data.
+S3_REFERENCE_PREFIX="${3:?$USAGE}"
 S3_PROCESSED_RAW_PREFIX="${4:-}"
 
 # Fixed container-internal layout; the Snakefile/scripts pick these up via

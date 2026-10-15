@@ -93,10 +93,7 @@ def _batch_job_name(sample):
 def _submit_batch_job(bucket, sample):
     input_uri = f"s3://{bucket}/landing/{sample}/"
     output_uri = f"s3://{bucket}/output/{sample}/"
-    # batch_entrypoint.sh's own default; passed explicitly rather than as ""
-    # because Batch's submit_job API rejects an empty string command element
-    # outright, so the shell script's own "${3:-default}" fallback never
-    # gets a chance to run.
+    # Required by batch_entrypoint.sh: this stage's own reference data.
     reference_uri = f"s3://{bucket}/reference/"
     processed_raw_uri = f"s3://{bucket}/processed_raw/{sample}/"
     resp = BATCH.submit_job(
