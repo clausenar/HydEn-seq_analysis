@@ -9,6 +9,13 @@ invocation that successfully flips status to SUBMITTED calls batch.submit_job.
 The other invocation's condition check fails and it exits quietly. This
 replaces an earlier S3 conditional-write lock file (locks/{sample}.lock)
 with the DynamoDB-native equivalent of the same claim pattern.
+
+The same function also receives EventBridge "Batch Job State Change" events
+for jobs on its queue that end SUCCEEDED or FAILED, and writes that final
+status to the sample's record. The status comes from Batch rather than from
+the container, so a job that is killed, runs out of memory or times out is
+still recorded. Any status other than SUBMITTED lets the sample be claimed
+again, so re-uploading a failed sample resubmits it.
 """
 
 import os
@@ -27,6 +34,7 @@ JOB_DEFINITION = os.environ["BATCH_JOB_DEFINITION"]
 
 LANDING_PREFIX = "landing/"
 FASTQ_EXTENSIONS = (".fastq", ".fastq.gz")
+FINAL_JOB_STATUSES = ("SUCCEEDED", "FAILED")
 
 
 def _now():
@@ -97,11 +105,46 @@ def _submit_batch_job(bucket, sample):
         jobDefinition=JOB_DEFINITION,
         # positional command = [input_uri, output_uri, reference_uri, processed_raw_uri]
         containerOverrides={"command": [input_uri, output_uri, reference_uri, processed_raw_uri]},
+        # Not used by the container. Batch echoes parameters back in its job
+        # state change events, which is how _record_job_result finds the
+        # sample: the job name is sanitized, so it can't be mapped back.
+        parameters={"sample_id": sample},
     )
     return resp["jobId"]
 
 
+def _record_job_result(detail):
+    """Writes a finished job's status to its sample's record.
+
+    Conditional on job_id, so if the sample has been resubmitted since, the
+    older job's result does not overwrite the newer job's record."""
+    status = detail.get("status")
+    sample = detail.get("parameters", {}).get("sample_id")
+    if status not in FINAL_JOB_STATUSES or sample is None:
+        return
+    try:
+        TABLE.update_item(
+            Key={"sample_id": sample},
+            UpdateExpression="SET #s = :status, status_reason = :reason, updated_at = :now",
+            ConditionExpression="job_id = :job",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":status": status,
+                ":reason": detail.get("statusReason", ""),
+                ":now": _now(),
+                ":job": detail["jobId"],
+            },
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+
+
 def handler(event, context):
+    if event.get("source") == "aws.batch":
+        _record_job_result(event["detail"])
+        return
+
     for record in event["Records"]:
         bucket = record["s3"]["bucket"]["name"]
         key = record["s3"]["object"]["key"]

@@ -14,6 +14,7 @@ S3 landing/{sample}/*.fastq ──(ObjectCreated)──► Lambda landing watche
                      S3 output/{sample}/   +   raw input archived to processed_raw/{sample}/
 
 Failed Batch job ──► EventBridge ──► SNS alert      Lambda errors ──► CloudWatch alarm ──► SNS alert
+Finished Batch job ──► EventBridge ──► landing watcher ──► DynamoDB status SUCCEEDED / FAILED
 ```
 
 ## What the stack creates
