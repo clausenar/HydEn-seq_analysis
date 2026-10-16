@@ -4,6 +4,20 @@ The whole AWS pipeline as code: the same event-driven design that was first
 set up by hand (see "AWS deployment" in the top-level README), now reviewable,
 testable and reproducible with one command.
 
+> **Not deployed; kept as a reference.** Since 2026-10-15 the `dev` and `prod`
+> stages are managed by Terraform ([`terraform/`](../terraform/README.md)). No
+> CDK stack is deployed (the 2026-10-07 dev test was destroyed the same day).
+> Running `cdk deploy` would not take over a Terraform stage: it creates a
+> separate `HydenSeqPipeline-<stage>` stack with its own bucket, table and
+> queue next to it. Only one tool should manage a given stage.
+>
+> This version also lags the Terraform one in three ways: prod's image is not
+> pinned by digest (it always runs `:latest`), Batch tasks may make any
+> outbound connection rather than HTTPS only, and resource names are
+> CloudFormation-generated rather than `hyden-seq-<stage>-…`. The Lambda and
+> the job-finished status rule are kept in step with Terraform, and CI still
+> runs the template tests and `cdk synth` on every pull request.
+
 ```
 S3 landing/{sample}/*.fastq ──(ObjectCreated)──► Lambda landing watcher
                                                   │  DynamoDB conditional claim (exactly once)

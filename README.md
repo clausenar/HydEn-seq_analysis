@@ -253,10 +253,11 @@ Since 2026-10-15 the live pipeline is the Terraform `prod` stage
 `hyden-seq-prod-data-49d313619a5b9de291931f8e93`, and every other resource named
 `hyden-seq-prod-…`. A `dev` copy (`hyden-seq-dev-…`) runs next to it for testing.
 The pipeline was first provisioned by hand on the bucket `kunkel-ribo-data-2026`;
-those resources are listed under [Original hand-built
-resources](#original-hand-built-resources-being-retired) and are being retired.
-Their `reference/`, `output/` and `processed_raw/` data has been copied to the
-prod bucket. Don't upload new samples to the old bucket.
+those resources are listed under [Original hand-built resources
+(retired)](#original-hand-built-resources-retired) and were deleted on
+2026-10-16. Their `reference/`, `output/` and `processed_raw/` data had been
+copied to the prod bucket first. The old bucket itself is kept for now, with
+no trigger on it, so uploading there does nothing.
 
 ### Architecture
 
@@ -286,10 +287,15 @@ AWS Batch (queue: hyden-seq-prod-queue, job def: hyden-seq-prod-pipeline)
 Lambda writes the final status to the DynamoDB table; FAILED also alerts via SNS
 ```
 
-### Original hand-built resources (being retired)
+### Original hand-built resources (retired)
 
-What was provisioned by hand before the Terraform stages existed. It still
-exists until it is retired, but new samples go to the prod bucket.
+What was provisioned by hand before the Terraform stages existed, kept here
+as a record. Deleted on 2026-10-16: the Lambda, job queue, compute
+environment, job definition, status table, the Lambda's log group and the
+four `hyden-seq-*-role` IAM roles, plus the bucket's S3 triggers. Still in
+use: the bucket `kunkel-ribo-data-2026` (kept for now, no triggers), the ECR
+repository, `hyden-seq-github-actions-ecr-push` and the OIDC provider (CI image
+builds).
 
 **Storage**
 
