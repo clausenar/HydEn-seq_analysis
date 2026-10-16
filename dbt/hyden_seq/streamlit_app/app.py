@@ -1,7 +1,11 @@
 """Braid plot + origin metaplot, live from Snowflake - Streamlit-in-Snowflake
 reproduction of this repo's braid_plot.py and origin_metaplot.py, querying
 HYDEN_SEQ.ANALYTICS_MARTS directly instead of reading local bedGraph files.
+The region braid plot computes its bins at query time from the staging view,
+so the window and bin size can be anything (see braid_region.py).
 """
+
+import io
 
 import numpy as np
 import pandas as pd
@@ -10,6 +14,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import streamlit as st
 from snowflake.snowpark.context import get_active_session
+
+import braid_region
 
 session = get_active_session()
 
@@ -22,7 +28,7 @@ samples = [
     ).collect()
 ]
 sample = st.sidebar.selectbox("Sample", samples)
-page = st.sidebar.radio("View", ["Braid plot", "Origin metaplot"])
+page = st.sidebar.radio("View", ["Braid plot", "Region braid plot", "Origin metaplot"])
 
 chrom_sizes_df = session.sql(
     "SELECT chrom, length FROM HYDEN_SEQ.PIPELINE.CHROM_SIZES"
@@ -42,22 +48,22 @@ def braid_plot_page():
     resolution = st.sidebar.radio("Resolution", ["500bp (genome-wide)", "5bp (single chromosome)"])
 
     if resolution.startswith("500bp"):
-        data = session.sql(f"""
+        data = session.sql("""
             SELECT chrom, bin_start, log2_watson_crick
             FROM HYDEN_SEQ.ANALYTICS_MARTS.BRAID_RATIO_BINNED
-            WHERE sample_name = '{sample}'
+            WHERE sample_name = ?
             ORDER BY chrom, bin_start
-        """).to_pandas()
+        """, params=[sample]).to_pandas()
         chroms = [c for c in chrom_sizes if c in set(data["CHROM"])]
         bin_size_label = "500bp"
     else:
         chrom = st.sidebar.selectbox("Chromosome", list(chrom_sizes.keys()))
-        data = session.sql(f"""
+        data = session.sql("""
             SELECT chrom, bin_start, log2_watson_crick
             FROM HYDEN_SEQ.ANALYTICS_MARTS.BRAID_RATIO_BINNED_5BP
-            WHERE sample_name = '{sample}' AND chrom = '{chrom}'
+            WHERE sample_name = ? AND chrom = ?
             ORDER BY bin_start
-        """).to_pandas()
+        """, params=[sample, chrom]).to_pandas()
         chroms = [chrom]
         bin_size_label = "5bp"
 
@@ -96,13 +102,90 @@ def braid_plot_page():
 
     with st.expander("Sample totals"):
         st.dataframe(
-            session.sql(f"""
+            session.sql("""
                 SELECT strand, chrom, n_positions, total_score
                 FROM HYDEN_SEQ.ANALYTICS_MARTS.BEDGRAPH_SIGNAL_SUMMARY
-                WHERE sample_name = '{sample}'
+                WHERE sample_name = ?
                 ORDER BY strand, chrom
-            """).to_pandas()
+            """, params=[sample]).to_pandas()
         )
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def region_rows(region_samples, chrom, start, end, bin_size):
+    """Bins with signal in the window, one row per (sample, bin). Cached for
+    10 minutes so moving a widget back and forth doesn't re-run the query."""
+    return session.sql(
+        braid_region.region_query(len(region_samples)),
+        params=braid_region.region_params(list(region_samples), chrom, start, end, bin_size),
+    ).to_pandas()
+
+
+def region_braid_page():
+    st.title("Region braid plot: log2(Watson / Crick) in a chosen window")
+
+    region_samples = st.sidebar.multiselect(
+        "Samples (stacked)", samples, default=[sample],
+        help="Pick several to compare them on the same axis.",
+    )
+    chrom = st.sidebar.selectbox("Chromosome", list(chrom_sizes.keys()))
+    chrom_len = int(chrom_sizes[chrom])
+    centre = st.sidebar.number_input(
+        "Centre position (bp)", min_value=0, max_value=chrom_len - 1,
+        value=min(chrom_len // 2, chrom_len - 1), step=1000,
+    )
+    half_window = st.sidebar.number_input(
+        "Window (+/- bp around centre)", min_value=1, max_value=chrom_len, value=20000, step=1000,
+    )
+    bin_size = st.sidebar.number_input("Bin size (bp)", min_value=1, value=100, step=50)
+    show_origins = st.sidebar.checkbox("Show origins", value=True)
+
+    if not region_samples:
+        st.info("Pick at least one sample.")
+        return
+    try:
+        start, end = braid_region.region_bounds(int(centre), int(half_window), int(bin_size), chrom_len)
+    except ValueError as e:
+        st.warning(str(e))
+        return
+
+    with st.spinner("Querying Snowflake..."):
+        rows = region_rows(tuple(region_samples), chrom, start, end, int(bin_size))
+    dense = braid_region.dense_bins(rows, region_samples, start, end, int(bin_size))
+
+    origins = []
+    if show_origins:
+        origins = [
+            r[0]
+            for r in session.sql(
+                "SELECT midpoint FROM HYDEN_SEQ.PIPELINE.ORIGINS WHERE chrom = ? AND midpoint >= ? AND midpoint < ?",
+                params=[chrom, start, end],
+            ).collect()
+        ]
+
+    n_bins = len(dense) // len(region_samples)
+    st.caption(
+        f"{chrom}:{start:,}-{end:,} - {int(bin_size):,}bp bins - {n_bins:,} bins per sample - "
+        f"{len(rows):,} bins with signal - {len(origins)} origins in window"
+    )
+    fig = braid_region.plot_region(dense, region_samples, chrom, start, end, int(bin_size), origins)
+    st.pyplot(fig)
+
+    png = io.BytesIO()
+    fig.savefig(png, format="png", dpi=200)
+    plt.close(fig)
+    name = f"braid_{chrom}_{start}-{end}_{int(bin_size)}bp"
+    col1, col2 = st.columns(2)
+    col1.download_button("Download plot (PNG)", png.getvalue(), f"{name}.png", "image/png")
+    col2.download_button(
+        "Download bins (CSV)",
+        dense.rename(columns=str.lower).to_csv(index=False).encode(),
+        f"{name}.csv",
+        "text/csv",
+    )
+
+    with st.expander("Binned values"):
+        st.dataframe(dense)
 
 
 def origin_metaplot_page():
@@ -111,11 +194,11 @@ def origin_metaplot_page():
     window = st.sidebar.number_input("Window (+/- bp around origin)", value=2000, step=500)
     bin_size = st.sidebar.number_input("Bin size (bp)", value=50, step=10)
 
-    long_df = session.sql(f"""
+    long_df = session.sql("""
         SELECT origin_id, strand, bin_start, score_sum
         FROM HYDEN_SEQ.ANALYTICS_MARTS.ORIGIN_SIGNAL_BINNED
-        WHERE sample_name = '{sample}'
-    """).to_pandas()
+        WHERE sample_name = ?
+    """, params=[sample]).to_pandas()
     st.caption(f"{sample} - {window}bp window, {bin_size}bp bins - {long_df['ORIGIN_ID'].nunique():,} origins")
 
     # Dense-fill every (origin, bin) combination with 0, matching the script's
@@ -176,5 +259,7 @@ def origin_metaplot_page():
 
 if page == "Braid plot":
     braid_plot_page()
+elif page == "Region braid plot":
+    region_braid_page()
 else:
     origin_metaplot_page()
