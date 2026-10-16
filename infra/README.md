@@ -67,7 +67,8 @@ cdk destroy -c stage=dev --profile ec2-pipeline
 ```
 
 The first deploy to the account needs a one-time `cdk bootstrap aws://069509443906/us-east-1 --profile ec2-pipeline`.
-Before a dev test run, copy `reference/` from the live bucket into the dev bucket.
+Before a dev test run, copy `reference/` from the prod bucket (see
+[`terraform/`](../terraform/README.md)) into the dev bucket.
 
 ## Verified end to end (2026-10-07)
 

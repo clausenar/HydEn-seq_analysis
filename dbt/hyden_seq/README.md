@@ -34,9 +34,12 @@ materialize as tables (schema `ANALYTICS_marts`) - the default schema
 Needs a `~/.dbt/profiles.yml` with key-pair auth configured (private key at
 `~/.snowflake/rsa_key.p8`, registered against the Snowflake user via
 `ALTER USER ... SET RSA_PUBLIC_KEY=...` - see the main README for the
-account-level setup). Then, from this directory:
+account-level setup). dbt (1.12, with the Snowflake adapter) is installed in
+the `snowflake_practice` conda environment, not on the default path. Then,
+from this directory:
 
 ```bash
+conda activate snowflake_practice
 dbt deps    # installs dbt_utils (used for the composite-uniqueness and
             # score>=0 tests)
 dbt debug   # verify the Snowflake connection

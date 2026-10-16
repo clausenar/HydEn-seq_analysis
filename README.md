@@ -458,11 +458,16 @@ and the repository's tags are mutable, so prod runs one exact image digest.
 
 ## Snowflake warehouse
 
-> **Still reads the original bucket.** `HYDEN_S3_INT`, `HYDEN_OUTPUT_STAGE`
-> and the IAM role `snowflake-hyden-seq-s3-access` point at
-> `kunkel-ribo-data-2026/output/`. Samples processed by the prod stage write
-> their bedGraphs to the prod bucket, which Snowflake can't read until the
-> integration, stage and role are pointed at it.
+> **Moved to the prod bucket on 2026-10-16.** `HYDEN_OUTPUT_STAGE` points at
+> the prod bucket's `output/`, and `BEDGRAPH_SIGNAL_RAW` was emptied and
+> reloaded from it. Load history is keyed by each file's full path, so without
+> emptying the table every row would have loaded twice. The reload also
+> replaced an outdated copy of `Kunkel_Ribo-seq_Pol2MGrnh201.1b.1`: Snowflake
+> held its 2026-09-15 output, while the sample was reprocessed on 2026-09-18
+> (8,943 / 8,694 forward / reverse bins now, 8,560 / 8,303 before). Row counts and score
+> totals per sample and strand now match the files exactly. Until
+> `kunkel-ribo-data-2026` is deleted, `HYDEN_S3_INT` and the IAM policy also
+> still allow the old bucket's `output/`.
 
 Pipeline bedGraph output also lands in Snowflake, read directly from the
 same S3 bucket the AWS pipeline already writes to — no data duplication,
@@ -475,8 +480,8 @@ S3 directly, rather than data being pushed into Snowflake from the AWS side.
 ### Architecture
 
 ```
-S3 kunkel-ribo-data-2026/output/{sample}/{sample}__forward.bedgraph
-S3 kunkel-ribo-data-2026/output/{sample}/{sample}__reverse.bedgraph
+S3 hyden-seq-prod-data-49d313619a5b9de291931f8e93/output/{sample}/{sample}__forward.bedgraph
+S3 hyden-seq-prod-data-49d313619a5b9de291931f8e93/output/{sample}/{sample}__reverse.bedgraph
         │
         │  read via cross-account IAM role assumption
         │  (external ID-scoped trust, Snowflake-initiated)
@@ -502,7 +507,7 @@ HYDEN_SEQ.PIPELINE.BEDGRAPH_SIGNAL  (view: sample_name/strand parsed out of
 |---|---|
 | Warehouse `HYDEN_WH` | XSMALL, `AUTO_SUSPEND = 60` / `AUTO_RESUME = TRUE` - zero compute cost while idle, matching the AWS side's scale-to-zero design |
 | Database/schema `HYDEN_SEQ.PIPELINE` | Holds everything below |
-| Storage integration `HYDEN_S3_INT` | `STORAGE_ALLOWED_LOCATIONS` scoped to `s3://kunkel-ribo-data-2026/output/` only - can't reach `landing/`, `reference/`, or `processed_raw/` |
+| Storage integration `HYDEN_S3_INT` | `STORAGE_ALLOWED_LOCATIONS` scoped to the prod bucket's `output/` (plus the old bucket's `output/` until it is deleted) - can't reach `landing/`, `reference/`, or `processed_raw/`. Change it with `ALTER`, never `CREATE OR REPLACE`: recreating it generates a new external ID and breaks the IAM role's trust |
 | File format `BEDGRAPH_TSV` | Tab-delimited, no header row (matches the pipeline's raw `bedtools genomecov` bedGraph output exactly) |
 | External stage `HYDEN_OUTPUT_STAGE` | Points at the storage integration + `output/` prefix |
 | Table `BEDGRAPH_SIGNAL_RAW` | Landing table: `chrom, start_pos, end_pos, score, src_file, loaded_at` |
@@ -513,7 +518,7 @@ AWS side, in the pipeline's own account (`069509443906`):
 | Resource | Notes |
 |---|---|
 | IAM role `snowflake-hyden-seq-s3-access` | Trust policy allows only Snowflake's generated IAM user (`STORAGE_AWS_IAM_USER_ARN` from `DESC INTEGRATION HYDEN_S3_INT`), conditioned on `sts:ExternalId` matching Snowflake's generated external ID - the standard Snowflake storage-integration security pattern, not a broad cross-account trust |
-| Inline policy `s3-read-output` | `s3:GetObject`/`s3:GetObjectVersion` + prefix-scoped `s3:ListBucket`, both limited to `output/*` - read-only, can't write or touch other prefixes |
+| Inline policy `s3-read-output` | `s3:GetObject`/`s3:GetObjectVersion` + prefix-scoped `s3:ListBucket`, both limited to `output/*` of the prod bucket (and the old bucket until it is deleted) - read-only, can't write or touch other prefixes |
 
 ### What's automatic vs manual
 
@@ -545,7 +550,7 @@ ORDER BY 1, 2;
 
 ### Loading new pipeline output
 
-After a new sample's bedGraphs land in `s3://kunkel-ribo-data-2026/output/`:
+After a new sample's bedGraphs land in `s3://hyden-seq-prod-data-49d313619a5b9de291931f8e93/output/`:
 
 ```sql
 COPY INTO BEDGRAPH_SIGNAL_RAW (chrom, start_pos, end_pos, score, src_file)
@@ -555,6 +560,16 @@ FROM (
 )
 PATTERN = '.*__(forward|reverse)\\.bedgraph'
 FILE_FORMAT = BEDGRAPH_TSV;
+```
+
+**Reprocessing a sample** rewrites its bedGraphs under the same names. Delete the
+sample's old rows before re-running `COPY INTO`, so the table never holds two
+versions of the same sample; this is how `Kunkel_Ribo-seq_Pol2MGrnh201.1b.1` went
+out of date between 2026-09-18 and 2026-10-16:
+
+```sql
+DELETE FROM BEDGRAPH_SIGNAL_RAW WHERE src_file LIKE '%/my_sample__%';
+-- then the COPY INTO above, with FORCE = TRUE if Snowflake reports the files as already loaded
 ```
 
 ### Transforming the landed data: `dbt/hyden_seq/`
