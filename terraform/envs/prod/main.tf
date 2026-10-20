@@ -44,6 +44,7 @@ module "pipeline" {
   # Prod runs one exact image; dev keeps following :latest. To release a new
   # image, test it in dev, then copy its digest here (the Build and push
   # pipeline image workflow prints it in its run summary) and apply prod.
-  # This one was built from a55b9ed and passed the dev run on 2026-10-16.
-  image_digest = "sha256:5edb89829dbfe61eb7226f5c14971a9289898910d17d062c21deebf0d82afe05"
+  # This one was built from f751051 (bedGraphs also published to
+  # tables/bedgraph/ for the Glue table) and passed the dev run on 2026-10-20.
+  image_digest = "sha256:29ea795b20b9befed535a02a640b36ce11d3ee119f50319ec1b669c5aa00d27d"
 }
