@@ -23,3 +23,13 @@ output "landing_watcher_function_name" {
 output "alerts_topic_arn" {
   value = aws_sns_topic.alerts.arn
 }
+
+output "glue_database_name" {
+  description = "Glue database holding the tables over the pipeline's output."
+  value       = aws_glue_catalog_database.this.name
+}
+
+output "athena_workgroup_name" {
+  description = "Athena workgroup to query the Glue tables in (results in athena-results/, 1 GB scan cap)."
+  value       = aws_athena_workgroup.this.name
+}

@@ -21,6 +21,10 @@ locals {
 
   landing_prefix       = "landing/"
   processed_raw_prefix = "processed_raw/"
+
+  # Queryable copies of the bedGraphs (see glue.tf) and Athena's result files.
+  bedgraph_table_prefix = "tables/bedgraph/"
+  athena_results_prefix = "athena-results/"
 }
 
 data "aws_region" "current" {}
