@@ -33,6 +33,17 @@ conda run --no-capture-output -n hyden_pipeline snakemake --cores 8 -p
 echo "Syncing output to ${S3_OUTPUT_PREFIX} ..."
 aws s3 sync /data/output "${S3_OUTPUT_PREFIX}"
 
+# The Glue/Athena table reads every file under its S3 location, and output/
+# also holds BAMs and plots, so the two bedGraphs get a prefix of their own.
+# Set on the job definition by Terraform; the file names already carry the
+# sample and strand, so a rerun of a sample overwrites rather than duplicates.
+if [ -n "${HYDEN_S3_BEDGRAPH_TABLE_PREFIX:-}" ]; then
+  echo "Publishing bedGraphs to ${HYDEN_S3_BEDGRAPH_TABLE_PREFIX} ..."
+  for f in /data/output/*__forward.bedgraph /data/output/*__reverse.bedgraph; do
+    aws s3 cp "$f" "${HYDEN_S3_BEDGRAPH_TABLE_PREFIX}$(basename "$f")"
+  done
+fi
+
 if [ -n "${S3_PROCESSED_RAW_PREFIX}" ]; then
   echo "Moving raw input from ${S3_INPUT_PREFIX} to ${S3_PROCESSED_RAW_PREFIX} ..."
   aws s3 mv "${S3_INPUT_PREFIX}" "${S3_PROCESSED_RAW_PREFIX}" --recursive

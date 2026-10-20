@@ -46,6 +46,10 @@ resource "aws_batch_job_definition" "pipeline" {
       { type = "VCPU", value = "8" },
       { type = "MEMORY", value = "16384" },
     ]
+    # Read by docker/batch_entrypoint.sh; the Glue table in glue.tf points here.
+    environment = [
+      { name = "HYDEN_S3_BEDGRAPH_TABLE_PREFIX", value = "s3://${aws_s3_bucket.data.bucket}/${local.bedgraph_table_prefix}" },
+    ]
     networkConfiguration         = { assignPublicIp = "ENABLED" }
     fargatePlatformConfiguration = { platformVersion = "LATEST" }
     logConfiguration = {

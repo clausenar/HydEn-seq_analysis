@@ -59,6 +59,21 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
+  # Athena writes every query's result to S3; the results are only needed
+  # until the console or CLI has read them.
+  rule {
+    id     = "ExpireAthenaResults"
+    status = "Enabled"
+
+    filter {
+      prefix = local.athena_results_prefix
+    }
+
+    expiration {
+      days = 7
+    }
+  }
+
   rule {
     id     = "AbortIncompleteUploads"
     status = "Enabled"

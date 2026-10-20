@@ -17,3 +17,11 @@ output "landing_watcher_function_name" {
 output "alerts_topic_arn" {
   value = module.pipeline.alerts_topic_arn
 }
+
+output "glue_database_name" {
+  value = module.pipeline.glue_database_name
+}
+
+output "athena_workgroup_name" {
+  value = module.pipeline.athena_workgroup_name
+}

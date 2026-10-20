@@ -24,6 +24,7 @@ S3 landing/{sample}/*.fastq ──(ObjectCreated)──► Lambda landing watche
                                                   │  Snakemake
                                                   ▼
                      S3 output/{sample}/   +   raw input archived to processed_raw/{sample}/
+                                    └─► tables/bedgraph/{sample}__{strand}.bedgraph ◄── Glue table ◄── Athena
 
 Failed Batch job ──► EventBridge ──► SNS alert      Lambda errors ──► CloudWatch alarm ──► SNS alert
 Finished Batch job ──► EventBridge ──► landing watcher ──► DynamoDB status SUCCEEDED / FAILED
@@ -40,6 +41,8 @@ terraform/
     lambda.tf              landing watcher (zipped from ../lambda), S3 trigger on landing/ only, job-finished rule
     iam.tf                 least-privilege roles, written out in full
     alerting.tf            SNS topic, EventBridge rule for failed jobs, Lambda error alarm
+    glue.tf                Glue database + bedGraph table, Athena workgroup and saved queries
+    athena/                the saved queries' SQL
     tests/                 `terraform test` suite (mocked AWS provider)
   envs/dev, envs/prod    one root per stage, each with its own state file
   bootstrap/             one-time: state bucket + read-only CI plan role
@@ -116,15 +119,45 @@ aws s3 cp $P/test-data/SRR1609190sub/SRR1609190sub_end2.fastq.gz $L/<name>_end2.
 Use a name that hasn't been used before: one whose status record is still
 `SUBMITTED` is not claimed again. A pass takes about 2.5 minutes: the job
 `SUCCEEDED`, the status record says `SUCCEEDED`, `output/<name>/` holds 21
-files, both FASTQs are in `processed_raw/<name>/` and `landing/<name>/` is
-empty. In prod, delete the test's `output/`, `processed_raw/` and status record
-afterwards so the test data isn't loaded into Snowflake.
+files, `tables/bedgraph/` holds `<name>__forward.bedgraph` and
+`<name>__reverse.bedgraph`, both FASTQs are in `processed_raw/<name>/` and
+`landing/<name>/` is empty. In prod, delete the test's `output/`,
+`processed_raw/`, its two `tables/bedgraph/` files and its status record
+afterwards so the test data isn't loaded into Snowflake or counted by Athena.
+
+### Querying with Glue and Athena
+
+Each stage has a Glue database (`hyden_seq_dev`, `hyden_seq_prod`) with one
+table, `bedgraph_signal_raw`: chrom, start_pos, end_pos, score, the same
+columns as `BEDGRAPH_SIGNAL_RAW` in Snowflake. It reads `tables/bedgraph/`,
+not `output/`, because Athena reads every file under a table's location and
+`output/` also holds BAMs and plots. The Batch job copies each sample's two
+bedGraphs there (`HYDEN_S3_BEDGRAPH_TABLE_PREFIX` on the job definition). The
+sample and strand are in the file name, so queries read them from `"$path"`,
+as `stg_bedgraph_signal` does in dbt. There are no partitions: the data is a
+few tens of MB per sample.
+
+Query in the stage's Athena workgroup (`hyden-seq-dev`, `hyden-seq-prod`).
+It enforces its settings: results go to `athena-results/` (SSE-S3, deleted
+after 7 days) and a query stops after scanning 1 GB. The console lists two
+saved queries, `bedgraph_signal_summary` (the same columns as the dbt mart, to
+compare with Snowflake) and `bedgraph_strand_share`.
+
+```bash
+aws athena start-query-execution --work-group hyden-seq-prod \
+  --query-execution-context Database=hyden_seq_prod \
+  --query-string 'SELECT count(*) FROM bedgraph_signal_raw'
+```
+
+Samples processed before the copy step existed are not in `tables/bedgraph/`;
+copy their two bedGraphs from `output/<sample>/` once.
 
 ## Tests and CI
 
 `modules/pipeline/tests/pipeline.tftest.hcl` mirrors the CDK template tests
 (private bucket, lifecycle, table contract, prod vs dev, Fargate sizing, network,
-trigger prefix, least-privilege IAM, alerting, variable validation). It runs
+trigger prefix, least-privilege IAM, alerting, Glue table prefix and columns,
+Athena workgroup limits, variable validation). It runs
 against `mock_provider "aws"`, so it creates nothing and needs no credentials.
 
 `.github/workflows/terraform-ci.yml` runs on every pull request that touches

@@ -387,6 +387,82 @@ run "alert_email_subscribes_when_given" {
   }
 }
 
+# ------------------------------------------------------------ glue / athena
+
+run "bedgraph_table_reads_only_its_own_prefix" {
+  assert {
+    condition     = one(aws_glue_catalog_table.bedgraph_signal_raw.storage_descriptor).location == "s3://hyden-seq-test-data/tables/bedgraph/"
+    error_message = "The table must point at tables/bedgraph/, not output/ (which also holds BAMs and plots)."
+  }
+
+  assert {
+    condition = (
+      { for e in jsondecode(aws_batch_job_definition.pipeline.container_properties).environment : e.name => e.value }
+      ["HYDEN_S3_BEDGRAPH_TABLE_PREFIX"] == one(aws_glue_catalog_table.bedgraph_signal_raw.storage_descriptor).location
+    )
+    error_message = "The job must publish bedGraphs to the prefix the table reads."
+  }
+
+  assert {
+    condition = (
+      [for c in one(aws_glue_catalog_table.bedgraph_signal_raw.storage_descriptor).columns : "${c.name}:${c.type}"]
+      == ["chrom:string", "start_pos:bigint", "end_pos:bigint", "score:double"]
+    )
+    error_message = "Columns must match the bedGraph layout and the Snowflake table."
+  }
+
+  assert {
+    condition     = one(one(aws_glue_catalog_table.bedgraph_signal_raw.storage_descriptor).ser_de_info).parameters["field.delim"] == "\t"
+    error_message = "bedGraphs are tab-separated."
+  }
+
+  assert {
+    condition     = aws_glue_catalog_database.this.name == "hyden_seq_dev"
+    error_message = "Glue database names use underscores and include the stage."
+  }
+}
+
+run "athena_workgroup_is_enforced_capped_and_encrypted" {
+  assert {
+    condition     = one(aws_athena_workgroup.this.configuration).enforce_workgroup_configuration
+    error_message = "Clients must not override the workgroup settings."
+  }
+
+  assert {
+    condition     = one(aws_athena_workgroup.this.configuration).bytes_scanned_cutoff_per_query == 1073741824
+    error_message = "Queries must stop after scanning 1 GB."
+  }
+
+  assert {
+    condition     = one(one(aws_athena_workgroup.this.configuration).result_configuration).output_location == "s3://hyden-seq-test-data/athena-results/"
+    error_message = "Results must go to athena-results/ in the stage's own bucket."
+  }
+
+  assert {
+    condition     = one(one(one(aws_athena_workgroup.this.configuration).result_configuration).encryption_configuration).encryption_option == "SSE_S3"
+    error_message = "Query results must be encrypted."
+  }
+
+  assert {
+    condition = anytrue([
+      for r in aws_s3_bucket_lifecycle_configuration.data.rule :
+      one(r.filter).prefix == "athena-results/" && one(r.expiration).days == 7
+    ])
+    error_message = "Athena results must expire after 7 days."
+  }
+}
+
+run "prod_workgroup_keeps_saved_queries" {
+  variables {
+    stage = "prod"
+  }
+
+  assert {
+    condition     = !aws_athena_workgroup.this.force_destroy
+    error_message = "Deleting the prod workgroup must not silently delete its saved queries."
+  }
+}
+
 # --------------------------------------------------------------- variables
 
 run "image_digest_pins_the_job_to_one_image" {
