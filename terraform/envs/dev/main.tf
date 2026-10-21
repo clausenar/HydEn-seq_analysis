@@ -41,3 +41,12 @@ module "pipeline" {
   stage       = "dev"
   alert_email = var.alert_email
 }
+
+# The first dev runs of the Glue job (2026-10-21) created its two log groups
+# before Terraform managed them; this adopts them. A no-op once applied, and
+# prod never had them, so it needs no import.
+import {
+  for_each = toset(["output", "error"])
+  to       = module.pipeline.aws_cloudwatch_log_group.glue_job[each.key]
+  id       = "/aws-glue/jobs/hyden-seq-dev-role/hyden-seq-dev-glue-job/${each.key}"
+}

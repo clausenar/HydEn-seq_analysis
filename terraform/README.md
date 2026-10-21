@@ -45,7 +45,7 @@ terraform/
     iam.tf                 least-privilege roles, written out in full
     alerting.tf            SNS topic, EventBridge rule for failed jobs, Lambda error alarm
     glue.tf                Glue database + bedGraph table, Athena workgroup and saved queries
-    glue_job.tf            Glue Spark job (script from ../glue), its role, security configuration, log group
+    glue_job.tf            Glue Spark job (script from ../glue), its role, security configuration, log groups
     athena/                the saved queries' SQL
     tests/                 `terraform test` suite (mocked AWS provider)
   envs/dev, envs/prod    one root per stage, each with its own state file

@@ -505,6 +505,29 @@ run "glue_job_reads_the_table_prefix_and_writes_its_own_database" {
   }
 }
 
+run "glue_logs_go_to_managed_groups_kept_30_days" {
+  assert {
+    condition = (
+      toset([for g in aws_cloudwatch_log_group.glue_job : g.name]) ==
+      toset(["/aws-glue/jobs/hyden-seq-dev-role/hyden-seq-dev-glue-job/error", "/aws-glue/jobs/hyden-seq-dev-role/hyden-seq-dev-glue-job/output"])
+    )
+    error_message = "Glue logs to /aws-glue/jobs/<security configuration>-role/<role>/{output,error} when a security configuration is set."
+  }
+
+  assert {
+    condition     = alltrue([for g in aws_cloudwatch_log_group.glue_job : g.retention_in_days == 30])
+    error_message = "Glue job logs must expire after 30 days."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.glue_job.policy).Statement :
+      !contains(s.Action, "logs:CreateLogGroup")
+    ])
+    error_message = "The job must not create log groups itself (they would never expire)."
+  }
+}
+
 run "glue_job_role_is_least_privilege" {
   assert {
     condition     = jsondecode(aws_iam_role.glue_job.assume_role_policy).Statement[0].Principal.Service == "glue.amazonaws.com"

@@ -24,6 +24,7 @@ Athena (saved query strand_balance_by_sample), files under warehouse/ in the sta
 | Bad input | stops before writing: unparseable lines (FAILFAST), files not named `{sample}__{forward\|reverse}.bedgraph`, no rows |
 | History | snapshots older than 7 days are expired at the end of each run, keeping at least the last 5 |
 | Table schema | created by the job (`CREATE TABLE IF NOT EXISTS`); Terraform owns the database, job, role and script upload |
+| Logs | `/aws-glue/jobs/hyden-seq-<stage>-role/hyden-seq-<stage>-glue-job/output` (driver stdout, including the run's summary line) and `/error` (Spark logs), one stream per run and executor, kept 30 days. Glue names them after the security configuration and role. |
 
 ## Running it
 

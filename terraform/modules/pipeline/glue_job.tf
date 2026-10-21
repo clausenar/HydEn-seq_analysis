@@ -13,6 +13,11 @@
 locals {
   glue_script_key  = "glue-scripts/bedgraph_to_iceberg.py"
   warehouse_prefix = "warehouse/"
+
+  # With a security configuration attached, Glue logs to groups named after it
+  # and the job role (not the shared /aws-glue/jobs/output and /error).
+  glue_job_role_name = "${local.name}-glue-job"
+  glue_log_prefix    = "/aws-glue/jobs/${local.name}-role/${local.glue_job_role_name}"
 }
 
 resource "aws_s3_object" "glue_script" {
@@ -22,10 +27,11 @@ resource "aws_s3_object" "glue_script" {
   etag   = filemd5("${path.module}/../../../glue/bedgraph_to_iceberg.py")
 }
 
-# Glue's own output and error logs go to the account-wide /aws-glue/jobs/*
-# groups; the job's continuous logs (driver and executors) go here, kept 30 days.
+# Driver and executor logs (one stream per run and per executor). Glue would
+# create these itself with no expiry; created here, they are kept 30 days.
 resource "aws_cloudwatch_log_group" "glue_job" {
-  name              = "/aws-glue/${local.name}"
+  for_each          = toset(["output", "error"])
+  name              = "${local.glue_log_prefix}/${each.key}"
   retention_in_days = 30
 }
 
@@ -72,22 +78,23 @@ resource "aws_glue_job" "bedgraph_to_iceberg" {
   }
 
   default_arguments = {
-    "--job-language"                     = "python"
-    "--datalake-formats"                 = "iceberg"
-    "--enable-metrics"                   = "true"
-    "--enable-continuous-cloudwatch-log" = "true"
-    "--continuous-log-logGroup"          = aws_cloudwatch_log_group.glue_job.name
-    "--input_path"                       = "s3://${aws_s3_bucket.data.bucket}/${local.bedgraph_table_prefix}"
-    "--database"                         = aws_glue_catalog_database.this.name
-    "--warehouse"                        = "s3://${aws_s3_bucket.data.bucket}/${local.warehouse_prefix}"
-    "--sample_name"                      = "ALL"
+    "--job-language"     = "python"
+    "--datalake-formats" = "iceberg"
+    "--enable-metrics"   = "true"
+    "--input_path"       = "s3://${aws_s3_bucket.data.bucket}/${local.bedgraph_table_prefix}"
+    "--database"         = aws_glue_catalog_database.this.name
+    "--warehouse"        = "s3://${aws_s3_bucket.data.bucket}/${local.warehouse_prefix}"
+    "--sample_name"      = "ALL"
   }
+
+  # The log groups must exist before the first run, or Glue creates them unmanaged.
+  depends_on = [aws_cloudwatch_log_group.glue_job]
 }
 
 # ------------------------------------------------------------------- IAM
 
 resource "aws_iam_role" "glue_job" {
-  name        = "${local.name}-glue-job"
+  name        = local.glue_job_role_name
   description = "HydEn-seq Glue job: read bedGraphs, write Iceberg tables in its own database"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -134,10 +141,11 @@ resource "aws_iam_role_policy" "glue_job" {
       },
       {
         # Iceberg's GlueCatalog: look up the database, create the tables on
-        # the first run, and commit each write by updating the table.
+        # the first run, and commit each write by updating the table. Glue 5.0
+        # also looks up the catalog itself at start-up (GetCatalog).
         Sid    = "IcebergTablesInOwnDatabase"
         Effect = "Allow"
-        Action = ["glue:GetDatabase", "glue:GetTable", "glue:GetTables", "glue:CreateTable", "glue:UpdateTable"]
+        Action = ["glue:GetCatalog", "glue:GetDatabase", "glue:GetTable", "glue:GetTables", "glue:CreateTable", "glue:UpdateTable"]
         Resource = [
           "arn:aws:glue:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:catalog",
           "arn:aws:glue:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:database/${aws_glue_catalog_database.this.name}",
@@ -145,13 +153,12 @@ resource "aws_iam_role_policy" "glue_job" {
         ]
       },
       {
-        Sid    = "WriteLogs"
-        Effect = "Allow"
-        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
-        Resource = [
-          "${aws_cloudwatch_log_group.glue_job.arn}:*",
-          "arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws-glue/jobs/*",
-        ]
+        # Only into the two groups above: no CreateLogGroup, so Glue can't
+        # fall back to creating unmanaged ones.
+        Sid      = "WriteLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = [for g in aws_cloudwatch_log_group.glue_job : "${g.arn}:*"]
       },
       {
         Sid       = "JobMetrics"
