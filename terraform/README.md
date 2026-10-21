@@ -25,6 +25,9 @@ S3 landing/{sample}/*.fastq ──(ObjectCreated)──► Lambda landing watche
                                                   ▼
                      S3 output/{sample}/   +   raw input archived to processed_raw/{sample}/
                                     └─► tables/bedgraph/{sample}__{strand}.bedgraph ◄── Glue table ◄── Athena
+                                              │
+                                              ▼  Glue Spark job (by hand for now)
+                                    Iceberg: bedgraph_signal, strand_balance ◄── Athena
 
 Failed Batch job ──► EventBridge ──► SNS alert      Lambda errors ──► CloudWatch alarm ──► SNS alert
 Finished Batch job ──► EventBridge ──► landing watcher ──► DynamoDB status SUCCEEDED / FAILED
@@ -42,6 +45,7 @@ terraform/
     iam.tf                 least-privilege roles, written out in full
     alerting.tf            SNS topic, EventBridge rule for failed jobs, Lambda error alarm
     glue.tf                Glue database + bedGraph table, Athena workgroup and saved queries
+    glue_job.tf            Glue Spark job (script from ../glue), its role, security configuration, log groups
     athena/                the saved queries' SQL
     tests/                 `terraform test` suite (mocked AWS provider)
   envs/dev, envs/prod    one root per stage, each with its own state file
@@ -152,12 +156,20 @@ aws athena start-query-execution --work-group hyden-seq-prod \
 Samples processed before the copy step existed are not in `tables/bedgraph/`;
 copy their two bedGraphs from `output/<sample>/` once.
 
+The Glue job `hyden-seq-<stage>-bedgraph-to-iceberg` turns those files into two
+Iceberg tables in the same database, `bedgraph_signal` (silver) and
+`strand_balance` (gold), both partitioned by sample, with their files under
+`warehouse/`. Start it by hand for now, for all samples or one; see
+[`glue/README.md`](../glue/README.md). The saved query `strand_balance_by_sample`
+reads the gold table.
+
 ## Tests and CI
 
 `modules/pipeline/tests/pipeline.tftest.hcl` mirrors the CDK template tests
 (private bucket, lifecycle, table contract, prod vs dev, Fargate sizing, network,
 trigger prefix, least-privilege IAM, alerting, Glue table prefix and columns,
-Athena workgroup limits, variable validation). It runs
+Athena workgroup limits, Glue job script, version, inputs and role, variable
+validation). The Glue job's own tests are in `glue/tests` (see `glue/README.md`). It runs
 against `mock_provider "aws"`, so it creates nothing and needs no credentials.
 
 `.github/workflows/terraform-ci.yml` runs on every pull request that touches

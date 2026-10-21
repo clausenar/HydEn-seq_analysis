@@ -1,0 +1,4 @@
+# Local tests for the Glue job. Glue 5.0 runs Spark 3.5.4 with Iceberg 1.7.1;
+# the tests fetch the matching Iceberg runtime jar through spark.jars.packages.
+pyspark==3.5.4
+pytest

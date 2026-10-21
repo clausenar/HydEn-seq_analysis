@@ -10,12 +10,14 @@ on:
     paths:
       - "terraform/**"
       - "lambda/**"
+      - "glue/bedgraph_to_iceberg.py" # uploaded by Terraform
       - ".github/workflows/terraform-ci.yml"
   push:
     branches: [main]
     paths:
       - "terraform/**"
       - "lambda/**"
+      - "glue/bedgraph_to_iceberg.py" # uploaded by Terraform
       - ".github/workflows/terraform-ci.yml"
 
 permissions:

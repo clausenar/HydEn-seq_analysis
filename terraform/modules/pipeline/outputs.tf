@@ -33,3 +33,8 @@ output "athena_workgroup_name" {
   description = "Athena workgroup to query the Glue tables in (results in athena-results/, 1 GB scan cap)."
   value       = aws_athena_workgroup.this.name
 }
+
+output "glue_job_name" {
+  description = "Glue job that writes the Iceberg tables. Start with: aws glue start-job-run --job-name <this>"
+  value       = aws_glue_job.bedgraph_to_iceberg.name
+}

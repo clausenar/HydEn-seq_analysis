@@ -463,6 +463,104 @@ run "prod_workgroup_keeps_saved_queries" {
   }
 }
 
+run "glue_job_runs_the_uploaded_script_on_glue_5" {
+  assert {
+    condition     = one(aws_glue_job.bedgraph_to_iceberg.command).script_location == "s3://hyden-seq-test-data/glue-scripts/bedgraph_to_iceberg.py"
+    error_message = "The job must run the script Terraform uploads."
+  }
+
+  assert {
+    condition     = aws_s3_object.glue_script.key == "glue-scripts/bedgraph_to_iceberg.py"
+    error_message = "The script must be uploaded where the job looks for it."
+  }
+
+  assert {
+    condition = (
+      aws_glue_job.bedgraph_to_iceberg.glue_version == "5.0" &&
+      aws_glue_job.bedgraph_to_iceberg.worker_type == "G.1X" &&
+      aws_glue_job.bedgraph_to_iceberg.number_of_workers == 2
+    )
+    error_message = "Glue 5.0 (Spark 3.5, Iceberg 1.7) on 2 G.1X workers, the smallest Spark job."
+  }
+
+  assert {
+    condition     = aws_glue_job.bedgraph_to_iceberg.security_configuration == aws_glue_security_configuration.this.name
+    error_message = "The job must use the stage's security configuration."
+  }
+}
+
+run "glue_job_reads_the_table_prefix_and_writes_its_own_database" {
+  assert {
+    condition     = aws_glue_job.bedgraph_to_iceberg.default_arguments["--input_path"] == one(aws_glue_catalog_table.bedgraph_signal_raw.storage_descriptor).location
+    error_message = "The job must read the same prefix the raw table and the Batch job use."
+  }
+
+  assert {
+    condition = (
+      aws_glue_job.bedgraph_to_iceberg.default_arguments["--database"] == "hyden_seq_dev" &&
+      aws_glue_job.bedgraph_to_iceberg.default_arguments["--warehouse"] == "s3://hyden-seq-test-data/warehouse/" &&
+      aws_glue_job.bedgraph_to_iceberg.default_arguments["--datalake-formats"] == "iceberg"
+    )
+    error_message = "Iceberg tables go in the stage's database, with files under warehouse/."
+  }
+}
+
+run "glue_logs_go_to_managed_groups_kept_30_days" {
+  assert {
+    condition = (
+      toset([for g in aws_cloudwatch_log_group.glue_job : g.name]) ==
+      toset(["/aws-glue/jobs/hyden-seq-dev-role/hyden-seq-dev-glue-job/error", "/aws-glue/jobs/hyden-seq-dev-role/hyden-seq-dev-glue-job/output"])
+    )
+    error_message = "Glue logs to /aws-glue/jobs/<security configuration>-role/<role>/{output,error} when a security configuration is set."
+  }
+
+  assert {
+    condition     = alltrue([for g in aws_cloudwatch_log_group.glue_job : g.retention_in_days == 30])
+    error_message = "Glue job logs must expire after 30 days."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.glue_job.policy).Statement :
+      !contains(s.Action, "logs:CreateLogGroup")
+    ])
+    error_message = "The job must not create log groups itself (they would never expire)."
+  }
+}
+
+run "glue_job_role_is_least_privilege" {
+  assert {
+    condition     = jsondecode(aws_iam_role.glue_job.assume_role_policy).Statement[0].Principal.Service == "glue.amazonaws.com"
+    error_message = "Only Glue may assume the job role."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for s in jsondecode(aws_iam_role_policy.glue_job.policy).Statement : [
+        for a in s.Action : !endswith(a, ":*")
+      ]
+    ]))
+    error_message = "No wildcard actions."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.glue_job.policy).Statement :
+      !contains(s.Action, "s3:PutObject") || s.Resource == ["arn:aws:s3:::hyden-seq-test-data/warehouse/*"]
+    ])
+    error_message = "The job may only write under warehouse/ (not the pipeline's input or output)."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for s in jsondecode(aws_iam_role_policy.glue_job.policy).Statement : [
+        for r in s.Resource : !startswith(r, "arn:aws:glue:") || strcontains(r, ":catalog") || strcontains(r, "hyden_seq_dev")
+      ]
+    ]))
+    error_message = "Glue permissions must be limited to the stage's own database."
+  }
+}
+
 # --------------------------------------------------------------- variables
 
 run "image_digest_pins_the_job_to_one_image" {

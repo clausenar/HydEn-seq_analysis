@@ -10,6 +10,7 @@ skip-check:
   - CKV_AWS_158 # CloudWatch log group encrypted with KMS
   - CKV_AWS_173 # Lambda environment variables encrypted with a CMK (they hold no secrets)
   - CKV_AWS_26  # SNS encryption: EventBridge can only publish to a topic encrypted with a CMK
+  - CKV_AWS_99  # Glue security configuration: S3 is SSE-S3; CloudWatch logs and bookmarks would need a CMK
   # Doubles storage cost; raw input is already archived to processed_raw/ and
   # can be re-downloaded from the public archive.
   - CKV_AWS_144 # S3 cross-region replication
