@@ -1,0 +1,43 @@
+name: Glue job CI
+
+# Runs the Glue job's tests (glue/tests) on a local Spark with the same Spark
+# and Iceberg versions as Glue 5.0. No AWS access: a file-based Iceberg catalog
+# stands in for the Glue Data Catalog. Deploying the script is Terraform's job.
+on:
+  pull_request:
+    paths:
+      - "glue/**"
+      - ".github/workflows/glue-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "glue/**"
+      - ".github/workflows/glue-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Glue 5.0 runs Python 3.11.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: glue/requirements-dev.txt
+
+      - run: pip install -r glue/requirements-dev.txt
+
+      - name: Tests
+        run: pytest glue/tests -q
+        env:
+          SPARK_LOCAL_IP: 127.0.0.1

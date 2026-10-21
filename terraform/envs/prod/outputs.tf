@@ -25,3 +25,7 @@ output "glue_database_name" {
 output "athena_workgroup_name" {
   value = module.pipeline.athena_workgroup_name
 }
+
+output "glue_job_name" {
+  value = module.pipeline.glue_job_name
+}

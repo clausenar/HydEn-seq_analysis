@@ -108,3 +108,11 @@ resource "aws_athena_named_query" "strand_share" {
   database    = aws_glue_catalog_database.this.name
   query       = file("${path.module}/athena/bedgraph_strand_share.sql")
 }
+
+resource "aws_athena_named_query" "strand_balance" {
+  name        = "strand_balance_by_sample"
+  description = "Forward share per sample from the Iceberg gold table written by the Glue job"
+  workgroup   = aws_athena_workgroup.this.id
+  database    = aws_glue_catalog_database.this.name
+  query       = file("${path.module}/athena/strand_balance_by_sample.sql")
+}
