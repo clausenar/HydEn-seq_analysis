@@ -48,6 +48,7 @@ terraform/
     glue.tf                Glue database + bedGraph table, Athena workgroup and saved queries
     glue_job.tf            Glue Spark job (script from ../glue), its role, security configuration, log groups
     orchestration.tf       Batch job succeeded ─► EventBridge ─► Step Functions ─► Glue job; SNS alert on failure
+    snowflake.tf           read-only IAM role for Snowflake's Glue catalog integration and external volume
     athena/                the saved queries' SQL
     tests/                 `terraform test` suite (mocked AWS provider)
   envs/dev, envs/prod    one root per stage, each with its own state file

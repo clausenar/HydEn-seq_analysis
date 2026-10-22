@@ -650,6 +650,77 @@ run "orchestration_roles_are_least_privilege" {
   }
 }
 
+# --------------------------------------------------------------- snowflake
+
+run "snowflake_role_is_unusable_until_linked" {
+  assert {
+    condition = (
+      jsondecode(aws_iam_role.snowflake_iceberg.assume_role_policy).Statement[0].Principal.AWS == ["arn:aws:iam::123456789012:root"] &&
+      jsondecode(aws_iam_role.snowflake_iceberg.assume_role_policy).Statement[0].Condition.StringEquals["sts:ExternalId"] == ["not-linked-to-snowflake-yet"]
+    )
+    error_message = "Before linking, only a placeholder external ID may match, so nobody can assume the role."
+  }
+}
+
+run "snowflake_role_trusts_only_the_linked_snowflake_ids" {
+  variables {
+    snowflake_iceberg_trust = {
+      iam_user_arns = ["arn:aws:iam::111122223333:user/abc1-s-v2st0000"]
+      external_ids  = ["GLUE_EXT_ID", "VOLUME_EXT_ID"]
+    }
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role.snowflake_iceberg.assume_role_policy).Statement[0].Principal.AWS == ["arn:aws:iam::111122223333:user/abc1-s-v2st0000"] &&
+      jsondecode(aws_iam_role.snowflake_iceberg.assume_role_policy).Statement[0].Condition.StringEquals["sts:ExternalId"] == ["GLUE_EXT_ID", "VOLUME_EXT_ID"]
+    )
+    error_message = "The trust must name Snowflake's IAM user and both external IDs (catalog integration and external volume)."
+  }
+}
+
+run "snowflake_role_is_read_only_and_scoped_to_the_iceberg_tables" {
+  assert {
+    condition = alltrue(flatten([
+      for s in jsondecode(aws_iam_role_policy.snowflake_iceberg.policy).Statement : [
+        for a in s.Action : anytrue([for p in ["glue:Get", "s3:Get", "s3:List"] : startswith(a, p)])
+      ]
+    ]))
+    error_message = "Snowflake gets read actions only (Get*/List*)."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for s in jsondecode(aws_iam_role_policy.snowflake_iceberg.policy).Statement : [
+        for r in s.Resource : !startswith(r, "arn:aws:s3:::hyden-seq-test-data/") || r == "arn:aws:s3:::hyden-seq-test-data/warehouse/*"
+      ]
+    ]))
+    error_message = "Object reads are limited to warehouse/ (not output/, landing/ or the raw bedGraphs)."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for s in jsondecode(aws_iam_role_policy.snowflake_iceberg.policy).Statement : [
+        for r in s.Resource : !startswith(r, "arn:aws:glue:") || strcontains(r, ":catalog") || strcontains(r, "hyden_seq_dev")
+      ]
+    ]))
+    error_message = "Glue reads are limited to the stage's own database."
+  }
+}
+
+run "rejects_a_malformed_snowflake_trust" {
+  command = plan
+
+  variables {
+    snowflake_iceberg_trust = {
+      iam_user_arns = ["not-an-arn"]
+      external_ids  = ["X"]
+    }
+  }
+
+  expect_failures = [var.snowflake_iceberg_trust]
+}
+
 # --------------------------------------------------------------- variables
 
 run "image_digest_pins_the_job_to_one_image" {

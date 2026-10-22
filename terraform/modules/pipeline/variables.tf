@@ -61,3 +61,25 @@ variable "max_vcpus" {
   type        = number
   default     = 16
 }
+
+# Filled in after the Snowflake catalog integration and external volume exist
+# (see snowflake.tf): DESC CATALOG INTEGRATION gives GLUE_AWS_IAM_USER_ARN and
+# GLUE_AWS_EXTERNAL_ID, DESC EXTERNAL VOLUME gives STORAGE_AWS_IAM_USER_ARN and
+# STORAGE_AWS_EXTERNAL_ID. Usually both IAM user ARNs are the same.
+variable "snowflake_iceberg_trust" {
+  description = "Snowflake IAM user ARN(s) and external IDs allowed to assume the Iceberg read role; null until linked."
+  type = object({
+    iam_user_arns = list(string)
+    external_ids  = list(string)
+  })
+  default = null
+
+  validation {
+    condition = var.snowflake_iceberg_trust == null || (
+      length(var.snowflake_iceberg_trust.iam_user_arns) > 0 &&
+      length(var.snowflake_iceberg_trust.external_ids) > 0 &&
+      alltrue([for a in var.snowflake_iceberg_trust.iam_user_arns : can(regex("^arn:aws:iam::[0-9]{12}:user/", a))])
+    )
+    error_message = "snowflake_iceberg_trust needs at least one IAM user ARN (arn:aws:iam::<12 digits>:user/...) and one external ID."
+  }
+}
