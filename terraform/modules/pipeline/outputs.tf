@@ -38,3 +38,8 @@ output "glue_job_name" {
   description = "Glue job that writes the Iceberg tables. Start with: aws glue start-job-run --job-name <this>"
   value       = aws_glue_job.bedgraph_to_iceberg.name
 }
+
+output "snowflake_iceberg_role_arn" {
+  description = "IAM role for the Snowflake catalog integration and external volume (GLUE_AWS_ROLE_ARN / STORAGE_AWS_ROLE_ARN)."
+  value       = aws_iam_role.snowflake_iceberg.arn
+}

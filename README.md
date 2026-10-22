@@ -598,6 +598,24 @@ DELETE FROM BEDGRAPH_SIGNAL_RAW WHERE src_file LIKE '%/my_sample__%';
 -- then the COPY INTO above, with FORCE = TRUE if Snowflake reports the files as already loaded
 ```
 
+### Iceberg tables, read in place (in progress)
+
+The Iceberg tables the Glue job writes (see "Glue and Iceberg layer" above) can
+be read by Snowflake directly, with no copy and no `COPY INTO`:
+
+```
+Glue Data Catalog hyden_seq_<stage> ◄── catalog integration HYDEN_GLUE_<STAGE>_INT ─┐
+s3://<bucket>/warehouse/ (Iceberg)  ◄── external volume HYDEN_ICEBERG_<STAGE>_VOL ──┤ both assume the IAM role
+                                                                                    │ hyden-seq-<stage>-snowflake-iceberg
+                                         HYDEN_SEQ.ICEBERG[_DEV].BEDGRAPH_SIGNAL ◄──┘ (read-only, Terraform)
+                                         HYDEN_SEQ.ICEBERG[_DEV].STRAND_BALANCE
+```
+
+The tables refresh themselves from the Glue catalog (`AUTO_REFRESH`), so each
+sample appears in Snowflake once the Glue job commits it, after its Data
+Quality check. Setting it up takes a handshake between the two sides; the SQL
+and the order of steps are in [`snowflake/iceberg_glue_dev.sql`](snowflake/iceberg_glue_dev.sql).
+
 ### Transforming the landed data: `dbt/hyden_seq/`
 
 `BEDGRAPH_SIGNAL_RAW` above is the raw landing table; a small dbt project in

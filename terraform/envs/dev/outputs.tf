@@ -29,3 +29,7 @@ output "athena_workgroup_name" {
 output "glue_job_name" {
   value = module.pipeline.glue_job_name
 }
+
+output "snowflake_iceberg_role_arn" {
+  value = module.pipeline.snowflake_iceberg_role_arn
+}
