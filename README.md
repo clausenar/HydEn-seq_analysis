@@ -282,10 +282,33 @@ AWS Batch (queue: hyden-seq-prod-queue, job def: hyden-seq-prod-pipeline)
     4. snakemake --cores 8
     5. sync /data/output → s3://.../output/{sample}/
     6. move s3://.../landing/{sample}/ → s3://.../processed_raw/{sample}/
+    7. copy the two bedGraphs → s3://.../tables/bedgraph/ (for the Glue tables)
         │  EventBridge: Batch job SUCCEEDED / FAILED
         ▼
 Lambda writes the final status to the DynamoDB table; FAILED also alerts via SNS
+        │  SUCCEEDED also starts:
+        ▼
+Step Functions: hyden-seq-prod-to-iceberg → Glue job for that sample
+  (Glue Data Quality gate, then Iceberg tables; SNS alert on failure)
 ```
+
+### Glue and Iceberg layer
+
+Since 2026-10-22 every sample the pipeline finishes is also loaded into Apache
+Iceberg tables in the Glue Data Catalog, queryable in Athena (workgroup
+`hyden-seq-prod`, database `hyden_seq_prod`):
+
+| Table | What it holds |
+|---|---|
+| `bedgraph_signal_raw` | Glue table over the text bedGraphs in `tables/bedgraph/` |
+| `bedgraph_signal` | Iceberg, silver: one typed row per interval, sample and strand as columns, partitioned by sample |
+| `strand_balance` | Iceberg, gold: forward/reverse signal and forward share per sample and chromosome |
+
+The Glue Spark job ([`glue/`](glue/README.md)) checks each sample against Glue
+Data Quality rules before it writes anything, and a rerun replaces the sample's
+rows rather than adding to them. Its infrastructure (catalog, Athena workgroup
+and saved queries, job, state machine) is in the Terraform module; see
+"Querying with Glue and Athena" in [`terraform/README.md`](terraform/README.md).
 
 ### Original hand-built resources (retired)
 
@@ -355,7 +378,8 @@ S3 prefixes:
 
 - **Fully automatic**: merging code to `main` → image rebuild (CI); uploading a
   complete fastq pair to `landing/{sample}/` → job submission → output in S3
-  → raw data archived to `processed_raw/`
+  → raw data archived to `processed_raw/` → sample checked and loaded into the
+  Iceberg tables by the Glue job
 - **Manual, by choice**: submitting a job directly via `aws batch submit-job`
   (for reprocessing existing data, or input that's already elsewhere in S3)
 
@@ -365,6 +389,8 @@ Nothing runs, and nothing is billed, while idle. Ongoing cost is just S3 and
 ECR storage (both cheap at this data scale) plus whatever Fargate compute a
 job actually consumes while running. Lambda invocations and GitHub Actions
 minutes stay comfortably inside the free tier at any normal usage frequency.
+Each sample's Glue run costs about $0.03 (2 DPU for about 2 minutes), and
+Athena queries scan megabytes.
 
 ### Using the landing zone (fully automatic)
 
@@ -523,7 +549,7 @@ AWS side, in the pipeline's own account (`069509443906`):
 ### What's automatic vs manual
 
 - **Automatic**: the warehouse suspending/resuming itself; the view staying in sync with whatever's in the landing table
-- **Manual**: re-running `COPY INTO BEDGRAPH_SIGNAL_RAW ...` after a new pipeline run lands new bedGraphs in S3. `COPY INTO` only loads files it hasn't already loaded (tracked via Snowflake's own load history), so it's safe to re-run repeatedly - it just does nothing on files already landed. There's no S3-event-triggered auto-load wired up (the AWS side's Lambda watcher triggers *pipeline runs*, not this load) - a natural next step would be an SNS/SQS-triggered Snowpipe for that, not yet built here
+- **Manual**: re-running `COPY INTO BEDGRAPH_SIGNAL_RAW ...` after a new pipeline run lands new bedGraphs in S3. `COPY INTO` only loads files it hasn't already loaded (tracked via Snowflake's own load history), so it's safe to re-run repeatedly - it just does nothing on files already landed. There's no S3-event-triggered auto-load wired up (the AWS side's Lambda watcher triggers *pipeline runs*, not this load) - see [Next steps](#next-steps)
 
 ### Cost shape
 
@@ -579,3 +605,48 @@ DELETE FROM BEDGRAPH_SIGNAL_RAW WHERE src_file LIKE '%/my_sample__%';
 model (source declaration, tests, a SQL-native version of `braid_plot.py`'s
 log2(Watson/Crick) ratio) instead of one hand-written view. See that
 directory's own README for how to run it.
+
+## Next steps
+
+The AWS side, including the Glue and Iceberg layer, is fully in Terraform with
+CI. The Snowflake side works and is
+tested, but three pieces are still manual. None of them matters yet for a
+one-person project with a handful of samples; with more users or daily data
+they would come first.
+
+### 1. Load new output into Snowflake automatically
+
+- **Now:** after a pipeline run, `COPY INTO BEDGRAPH_SIGNAL_RAW` has to be run
+  by hand (see "Loading new pipeline output" above). Until then Snowflake
+  doesn't have the new sample.
+- **Next, preferred:** let Snowflake read the Iceberg tables the Glue job
+  already writes (see "Glue and Iceberg layer" above), through a catalog
+  integration with the Glue Data Catalog. Each sample is then in Snowflake as
+  soon as the Glue job commits it, already checked by the Data Quality rules,
+  with no second copy of the data and no load step to run. dbt's source would
+  move from `BEDGRAPH_SIGNAL_RAW` to the Iceberg `bedgraph_signal` table.
+- **Next, alternative:** a Snowpipe with auto-ingest. An S3 event notification
+  on new `*__forward.bedgraph` / `*__reverse.bedgraph` files under `output/`
+  (through SNS/SQS) makes Snowpipe run the same `COPY INTO`. Simpler, but it
+  keeps a separate copy that skips the Data Quality gate.
+- **Why:** it is the warehouse version of what the landing watcher already does
+  for fastqs: a file lands, an event fires, the work runs once.
+
+### 2. Manage the Snowflake objects with Terraform
+
+- **Now:** the storage integration `HYDEN_S3_INT`, the stage, the file format,
+  the raw tables and `HYDEN_DBT_ROLE` were created with SQL run by hand in
+  Snowsight. The AWS half of the trust, the IAM role
+  `snowflake-hyden-seq-s3-access`, is also hand-made, and the two are linked by
+  copying ARNs and the external ID between them.
+- **Next:** the Snowflake Terraform provider for the Snowflake objects, plus the
+  IAM role in Terraform, so both halves of the trust are in one plan and get the
+  same plan → review → apply cycle as the pipeline.
+
+### 3. Run dbt in CI
+
+- **Now:** `dbt build` runs only on the development Mac. Terraform changes get
+  fmt, tests, lint and a plan on every pull request; dbt changes get nothing.
+- **Next:** a GitHub Actions job on pull requests that runs `dbt build` (models
+  and all tests) in a temporary Snowflake schema and drops it afterwards. Later,
+  slim CI (`--select state:modified+`) to build only what a pull request changed.
