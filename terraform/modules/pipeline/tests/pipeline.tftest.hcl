@@ -67,6 +67,16 @@ mock_provider "aws" {
       arn = "arn:aws:sns:us-east-1:123456789012:hyden-seq-test-alerts"
     }
   }
+  mock_resource "aws_glue_job" {
+    defaults = {
+      arn = "arn:aws:glue:us-east-1:123456789012:job/hyden-seq-dev-bedgraph-to-iceberg"
+    }
+  }
+  mock_resource "aws_sfn_state_machine" {
+    defaults = {
+      arn = "arn:aws:states:us-east-1:123456789012:stateMachine:hyden-seq-dev-to-iceberg"
+    }
+  }
   mock_resource "aws_cloudwatch_event_rule" {
     defaults = {
       arn = "arn:aws:events:us-east-1:123456789012:rule/hyden-seq-test-failed-job"
@@ -554,10 +564,89 @@ run "glue_job_role_is_least_privilege" {
   assert {
     condition = alltrue(flatten([
       for s in jsondecode(aws_iam_role_policy.glue_job.policy).Statement : [
-        for r in s.Resource : !startswith(r, "arn:aws:glue:") || strcontains(r, ":catalog") || strcontains(r, "hyden_seq_dev")
+        for r in s.Resource : !startswith(r, "arn:aws:glue:") || strcontains(r, ":catalog") || strcontains(r, "hyden_seq_dev") || endswith(r, ":job/hyden-seq-dev-bedgraph-to-iceberg")
       ]
     ]))
-    error_message = "Glue permissions must be limited to the stage's own database."
+    error_message = "Glue permissions must be limited to the stage's own database and its own job (Data Quality results)."
+  }
+}
+
+# ------------------------------------------------------------ orchestration
+
+run "successful_batch_jobs_start_the_iceberg_load" {
+  assert {
+    condition = (
+      jsondecode(aws_cloudwatch_event_rule.job_succeeded.event_pattern).detail.status == ["SUCCEEDED"] &&
+      jsondecode(aws_cloudwatch_event_rule.job_succeeded.event_pattern).detail.jobQueue == [aws_batch_job_queue.this.arn]
+    )
+    error_message = "Only successful jobs on this stage's queue may start the load."
+  }
+
+  assert {
+    condition     = jsondecode(aws_cloudwatch_event_rule.job_succeeded.event_pattern).detail.parameters.sample_id == [{ exists = true }]
+    error_message = "Jobs without a sample_id parameter (submitted by hand) must not start it."
+  }
+
+  assert {
+    condition     = one(aws_cloudwatch_event_target.job_succeeded_to_state_machine.input_transformer).input_paths["sample_id"] == "$.detail.parameters.sample_id"
+    error_message = "The execution input must carry the sample from the Batch job's parameters."
+  }
+
+  assert {
+    condition     = aws_cloudwatch_event_target.job_succeeded_to_state_machine.arn == aws_sfn_state_machine.to_iceberg.arn
+    error_message = "The rule must target the state machine."
+  }
+}
+
+run "state_machine_runs_the_glue_job_for_one_sample_and_alerts_on_failure" {
+  assert {
+    condition     = jsondecode(aws_sfn_state_machine.to_iceberg.definition).States.RunGlueJob.Resource == "arn:aws:states:::glue:startJobRun.sync"
+    error_message = "The state machine must wait for the Glue run (.sync), or failures would go unnoticed."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_sfn_state_machine.to_iceberg.definition).States.RunGlueJob.Parameters.JobName == "hyden-seq-dev-bedgraph-to-iceberg" &&
+      jsondecode(aws_sfn_state_machine.to_iceberg.definition).States.RunGlueJob.Parameters.Arguments["--sample_name.$"] == "$.sample_id"
+    )
+    error_message = "The run must be for the finished sample only."
+  }
+
+  assert {
+    condition     = jsondecode(aws_sfn_state_machine.to_iceberg.definition).States.RunGlueJob.Retry[0].ErrorEquals == ["Glue.ConcurrentRunsExceededException"]
+    error_message = "Only 'too many concurrent runs' is retried; real job failures go straight to the alert."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_sfn_state_machine.to_iceberg.definition).States.RunGlueJob.Catch[0].Next == "AlertFailure" &&
+      jsondecode(aws_sfn_state_machine.to_iceberg.definition).States.AlertFailure.Parameters.TopicArn == aws_sns_topic.alerts.arn &&
+      jsondecode(aws_sfn_state_machine.to_iceberg.definition).States.AlertFailure.Next == "Failed"
+    )
+    error_message = "A failed run must alert the stage's topic and end the execution as failed."
+  }
+}
+
+run "orchestration_roles_are_least_privilege" {
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.start_orchestration.policy).Statement[0].Resource == [aws_sfn_state_machine.to_iceberg.arn]
+    error_message = "EventBridge may start this state machine only."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.orchestration.policy).Statement :
+      s.Resource == ["*"] ? alltrue([for a in s.Action : startswith(a, "logs:")]) : true
+    ])
+    error_message = "Only the log-delivery actions (which have no resource-level permissions) may use Resource *."
+  }
+
+  assert {
+    condition = anytrue([
+      for s in jsondecode(aws_iam_role_policy.orchestration.policy).Statement :
+      contains(s.Action, "glue:StartJobRun") && s.Resource == ["arn:aws:glue:us-east-1:123456789012:job/hyden-seq-dev-bedgraph-to-iceberg"]
+    ])
+    error_message = "The state machine may run this stage's Glue job only."
   }
 }
 

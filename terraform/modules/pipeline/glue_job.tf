@@ -165,7 +165,14 @@ resource "aws_iam_role_policy" "glue_job" {
         Effect    = "Allow"
         Action    = ["cloudwatch:PutMetricData"]
         Resource  = ["*"] # this action has no resource-level permissions
-        Condition = { StringEquals = { "cloudwatch:namespace" = "Glue" } }
+        Condition = { StringEquals = { "cloudwatch:namespace" = ["Glue", "Glue Data Quality"] } }
+      },
+      {
+        # The job's Data Quality results, shown on the job's Data quality tab.
+        Sid      = "PublishDataQualityResults"
+        Effect   = "Allow"
+        Action   = ["glue:PublishDataQuality"]
+        Resource = ["arn:aws:glue:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:job/${local.name}-bedgraph-to-iceberg"]
       },
     ]
   })

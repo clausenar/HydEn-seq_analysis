@@ -6,6 +6,9 @@
         -> {database}.strand_balance    gold: per sample and chromosome, forward
                                         and reverse signal and the forward share
 
+Before anything is written, the silver rows must pass the Glue Data Quality
+ruleset below (inside Glue) - a failed rule fails the job and nothing lands.
+
 Both tables are partitioned by sample_name and written with overwritePartitions(),
 so rerunning a sample replaces its rows instead of adding to them. A run without
 a sample (--sample_name ALL) rewrites every sample found in the input; a sample
@@ -23,6 +26,7 @@ tests/test_bedgraph_to_iceberg.py tests it.
 
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
@@ -43,6 +47,28 @@ BEDGRAPH_SCHEMA = StructType([
     StructField("end_pos", LongType(), nullable=False),
     StructField("score", DoubleType(), nullable=False),
 ])
+
+SACCER3_CHROMS = ["chrI", "chrII", "chrIII", "chrIV", "chrV", "chrVI", "chrVII", "chrVIII",
+                  "chrIX", "chrX", "chrXI", "chrXII", "chrXIII", "chrXIV", "chrXV", "chrXVI", "chrM"]
+
+# Glue Data Quality (DQDL) rules for the silver rows of the samples in this run.
+# Run by glue_data_quality_gate() inside Glue; results go to the Glue console
+# (Data quality tab of the job) and to CloudWatch metrics.
+SILVER_RULESET = f"""Rules = [
+    RowCount > 0,
+    IsComplete "chrom",
+    IsComplete "start_pos",
+    IsComplete "end_pos",
+    IsComplete "score",
+    ColumnValues "strand" in ["forward", "reverse"],
+    DistinctValuesCount "strand" = 2,
+    ColumnValues "chrom" in [{", ".join(f'"{c}"' for c in SACCER3_CHROMS)}],
+    ColumnValues "start_pos" >= 0,
+    ColumnValues "score" > 0,
+    CustomSql "select count(*) from primary where end_pos <= start_pos" = 0
+]"""
+
+QualityGate = Callable[[DataFrame], None]
 
 SILVER_DDL = """
     sample_name  string    COMMENT 'From the file name {sample}__{strand}.bedgraph',
@@ -161,12 +187,45 @@ def expire_snapshots(spark: SparkSession, table: str, now: datetime) -> None:
     """)
 
 
+def no_quality_gate(silver: DataFrame) -> None:
+    """Outside Glue (tests, local runs) there is no Glue Data Quality to call."""
+
+
+def glue_data_quality_gate(spark: SparkSession, context: str) -> QualityGate:
+    """Evaluate SILVER_RULESET with Glue Data Quality; raise if any rule fails."""
+    from awsglue.context import GlueContext  # only exist inside Glue
+    from awsglue.dynamicframe import DynamicFrame
+    from awsgluedq.transforms import EvaluateDataQuality
+
+    glue_context = GlueContext(spark.sparkContext)
+
+    def gate(silver: DataFrame) -> None:
+        outcomes = EvaluateDataQuality.apply(
+            frame=DynamicFrame.fromDF(silver, glue_context, "silver"),
+            ruleset=SILVER_RULESET,
+            publishing_options={
+                "dataQualityEvaluationContext": context,
+                "enableDataQualityCloudWatchMetrics": True,
+                "enableDataQualityResultsPublishing": True,
+            },
+        ).toDF()
+        failed = outcomes.filter(F.col("Outcome") != "Passed").select("Rule", "FailureReason").collect()
+        for rule in outcomes.select("Rule", "Outcome").collect():
+            print(f"data quality: {rule['Outcome']}: {rule['Rule']}")
+        if failed:
+            reasons = "; ".join(f"{r['Rule']} ({r['FailureReason']})" for r in failed)
+            raise ValueError(f"{len(failed)} data quality rule(s) failed, nothing written: {reasons}")
+
+    return gate
+
+
 def run(spark: SparkSession, input_path: str, database: str, sample_name: str = ALL_SAMPLES,
-        now: datetime | None = None) -> dict:
+        now: datetime | None = None, quality_gate: QualityGate = no_quality_gate) -> dict:
     """The whole job. Returns row counts for the log (and the tests)."""
     now = now or datetime.now(timezone.utc).replace(tzinfo=None)
     silver = to_silver(read_bedgraphs(spark, input_path, sample_name), now).cache()
     rows = check_silver(silver)
+    quality_gate(silver)  # before any write: a failed rule leaves the tables as they were
     gold = to_gold(silver)
 
     silver_table = f"{CATALOG}.{database}.bedgraph_signal"
@@ -189,7 +248,8 @@ def main() -> None:
         builder = builder.config(key, value)
     spark = builder.getOrCreate()
 
-    result = run(spark, args["input_path"], args["database"], args["sample_name"])
+    gate = glue_data_quality_gate(spark, context=f"bedgraph_signal:{args['sample_name']}")
+    result = run(spark, args["input_path"], args["database"], args["sample_name"], quality_gate=gate)
     print(f"bedgraph_to_iceberg: {result}")
 
 
