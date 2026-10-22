@@ -19,6 +19,7 @@ skip-check:
   - CKV_AWS_18  # S3 access logging
   - CKV2_AWS_11 # VPC flow logs
   - CKV_AWS_50  # Lambda X-Ray tracing
+  - CKV_AWS_284 # Step Functions X-Ray tracing (one Glue task; execution history and ERROR logs are kept)
   - CKV_AWS_338 # 1-year log retention (30 days is kept)
   # Lambda hardening that does not fit this Lambda:
   - CKV_AWS_117 # Lambda in a VPC: it would need a NAT gateway or three interface endpoints

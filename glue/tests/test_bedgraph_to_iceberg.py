@@ -8,6 +8,7 @@ Needs Java 17 and network access the first time (Spark downloads the Iceberg jar
     pytest glue/tests
 """
 
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -170,3 +171,47 @@ def test_old_snapshots_are_expired_but_the_last_five_kept(spark, two_samples):
     job.run(spark, two_samples, DB, "SRR1", now=datetime.utcnow() + timedelta(days=8))
     assert snapshots("bedgraph_signal") == job.SNAPSHOTS_TO_KEEP
     assert snapshots("strand_balance") == job.SNAPSHOTS_TO_KEEP
+
+
+# ------------------------------------------------------------ data quality gate
+
+def test_quality_gate_sees_the_runs_silver_rows_before_anything_is_written(spark, two_samples):
+    seen = {}
+
+    def gate(silver):
+        seen["rows"] = silver.count()
+        seen["samples"] = {r.sample_name for r in silver.select("sample_name").distinct().collect()}
+        seen["tables_existed"] = spark.catalog.tableExists(f"{job.CATALOG}.{DB}.bedgraph_signal")
+
+    job.run(spark, two_samples, DB, "SRR1", now=NOW, quality_gate=gate)
+    assert seen == {"rows": 2, "samples": {"SRR1"}, "tables_existed": False}
+
+
+def test_a_failed_quality_gate_leaves_the_tables_as_they_were(spark, two_samples):
+    job.run(spark, two_samples, DB, now=NOW)
+    before = table(spark, "bedgraph_signal").filter("sample_name = 'SRR1'").collect()
+
+    write_bedgraph(Path(two_samples), "SRR1__forward.bedgraph", [("chrI", 1, 2, 99)])
+
+    def failing_gate(silver):
+        raise ValueError("1 data quality rule(s) failed, nothing written")
+
+    with pytest.raises(ValueError, match="data quality"):
+        job.run(spark, two_samples, DB, "SRR1", now=NOW, quality_gate=failing_gate)
+    assert table(spark, "bedgraph_signal").filter("sample_name = 'SRR1'").collect() == before
+
+
+def test_ruleset_covers_every_sacCer3_chromosome_and_the_key_columns():
+    rules = job.SILVER_RULESET
+    assert rules.startswith("Rules = [") and rules.endswith("]")
+    assert all(f'"{c}"' in rules for c in job.SACCER3_CHROMS) and len(job.SACCER3_CHROMS) == 17
+    for column in ("chrom", "start_pos", "end_pos", "score"):
+        assert f'IsComplete "{column}"' in rules
+    assert 'DistinctValuesCount "strand" = 2' in rules
+
+
+def test_data_quality_context_only_uses_characters_glue_accepts():
+    # Found in the first dev run: Glue rejects anything but letters, digits, - and _.
+    for sample in ("SRR1609190sub6", "Kunkel_Ribo-seq_Pol2MGrnh201.1b.1", "ALL", "a:b c/d"):
+        assert re.fullmatch(r"[A-Za-z0-9_-]+", job.data_quality_context(sample))
+    assert job.data_quality_context("Kunkel.1b.1") == "bedgraph_signal_Kunkel_1b_1"

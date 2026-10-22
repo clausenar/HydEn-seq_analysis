@@ -22,6 +22,7 @@ Athena (saved query strand_balance_by_sample), files under warehouse/ in the sta
 | Partitioning | both tables by `sample_name` |
 | Reruns | `overwritePartitions()`: a rerun replaces that sample's rows, other samples are untouched |
 | Bad input | stops before writing: unparseable lines (FAILFAST), files not named `{sample}__{forward\|reverse}.bedgraph`, no rows |
+| Data Quality | `SILVER_RULESET` (Glue Data Quality, DQDL) runs on the silver rows before any write: completeness, strand values and both strands present, the 17 sacCer3 chromosomes, start ≥ 0, score > 0, end > start. A failed rule fails the job and nothing is written. Results: the job's *Data quality* tab and CloudWatch metrics (namespace `Glue Data Quality`). |
 | History | snapshots older than 7 days are expired at the end of each run, keeping at least the last 5 |
 | Table schema | created by the job (`CREATE TABLE IF NOT EXISTS`); Terraform owns the database, job, role and script upload |
 | Logs | `/aws-glue/jobs/hyden-seq-<stage>-role/hyden-seq-<stage>-glue-job/output` (driver stdout, including the run's summary line) and `/error` (Spark logs), one stream per run and executor, kept 30 days. Glue names them after the security configuration and role. |
@@ -29,7 +30,10 @@ Athena (saved query strand_balance_by_sample), files under warehouse/ in the sta
 ## Running it
 
 Terraform uploads the script and creates the job (`terraform/modules/pipeline/glue_job.tf`).
-In phase 2 it is started by hand; phase 3 will start it when a Batch job succeeds.
+It runs by itself for every sample the pipeline finishes: a successful Batch job
+starts the Step Functions state machine `hyden-seq-<stage>-to-iceberg`
+(`orchestration.tf`), which runs the job for that sample and sends an SNS alert
+naming the sample if it fails. Start it by hand to reload everything or retry a sample:
 
 ```bash
 # all samples in tables/bedgraph/
@@ -45,7 +49,9 @@ DPU-hour, per second with a 1-minute minimum).
 ## Tests
 
 `tests/` runs the real job code on a local Spark with a file-based Iceberg
-catalog instead of the Glue Data Catalog. Needs Java 17, and network access the
+catalog instead of the Glue Data Catalog. Glue Data Quality only exists inside
+Glue, so the tests check that the gate runs before any write and that a failed
+gate leaves the tables unchanged; the ruleset itself is checked in a dev run. Needs Java 17, and network access the
 first time (Spark downloads the Iceberg runtime jar). CI runs them in
 `.github/workflows/glue-ci.yml`.
 

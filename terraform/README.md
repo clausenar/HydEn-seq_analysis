@@ -26,7 +26,8 @@ S3 landing/{sample}/*.fastq ──(ObjectCreated)──► Lambda landing watche
                      S3 output/{sample}/   +   raw input archived to processed_raw/{sample}/
                                     └─► tables/bedgraph/{sample}__{strand}.bedgraph ◄── Glue table ◄── Athena
                                               │
-                                              ▼  Glue Spark job (by hand for now)
+                                              ▼  Glue Spark job, started per sample by Step Functions
+                                              │  (Data Quality rules gate the write; SNS alert on failure)
                                     Iceberg: bedgraph_signal, strand_balance ◄── Athena
 
 Failed Batch job ──► EventBridge ──► SNS alert      Lambda errors ──► CloudWatch alarm ──► SNS alert
@@ -46,6 +47,7 @@ terraform/
     alerting.tf            SNS topic, EventBridge rule for failed jobs, Lambda error alarm
     glue.tf                Glue database + bedGraph table, Athena workgroup and saved queries
     glue_job.tf            Glue Spark job (script from ../glue), its role, security configuration, log groups
+    orchestration.tf       Batch job succeeded ─► EventBridge ─► Step Functions ─► Glue job; SNS alert on failure
     athena/                the saved queries' SQL
     tests/                 `terraform test` suite (mocked AWS provider)
   envs/dev, envs/prod    one root per stage, each with its own state file
@@ -128,6 +130,10 @@ files, `tables/bedgraph/` holds `<name>__forward.bedgraph` and
 `landing/<name>/` is empty. In prod, delete the test's `output/`,
 `processed_raw/`, its two `tables/bedgraph/` files and its status record
 afterwards so the test data isn't loaded into Snowflake or counted by Athena.
+A successful run also starts the to-Iceberg state machine; in prod, delete the
+test sample's partition from the two Iceberg tables too
+(`DELETE FROM bedgraph_signal WHERE sample_name = '<name>'` in Athena, and the
+same for `strand_balance`).
 
 ### Querying with Glue and Athena
 
@@ -159,7 +165,8 @@ copy their two bedGraphs from `output/<sample>/` once.
 The Glue job `hyden-seq-<stage>-bedgraph-to-iceberg` turns those files into two
 Iceberg tables in the same database, `bedgraph_signal` (silver) and
 `strand_balance` (gold), both partitioned by sample, with their files under
-`warehouse/`. Start it by hand for now, for all samples or one; see
+`warehouse/`. It runs for each sample the pipeline finishes (state machine
+`hyden-seq-<stage>-to-iceberg`), and by hand for all samples or a retry; see
 [`glue/README.md`](../glue/README.md). The saved query `strand_balance_by_sample`
 reads the gold table.
 
@@ -168,8 +175,8 @@ reads the gold table.
 `modules/pipeline/tests/pipeline.tftest.hcl` mirrors the CDK template tests
 (private bucket, lifecycle, table contract, prod vs dev, Fargate sizing, network,
 trigger prefix, least-privilege IAM, alerting, Glue table prefix and columns,
-Athena workgroup limits, Glue job script, version, inputs and role, variable
-validation). The Glue job's own tests are in `glue/tests` (see `glue/README.md`). It runs
+Athena workgroup limits, Glue job script, version, inputs and role, Glue log
+groups, the to-Iceberg trigger, state machine and roles, variable validation). The Glue job's own tests are in `glue/tests` (see `glue/README.md`). It runs
 against `mock_provider "aws"`, so it creates nothing and needs no credentials.
 
 `.github/workflows/terraform-ci.yml` runs on every pull request that touches
