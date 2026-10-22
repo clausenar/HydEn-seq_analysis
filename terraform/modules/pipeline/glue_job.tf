@@ -169,10 +169,12 @@ resource "aws_iam_role_policy" "glue_job" {
       },
       {
         # The job's Data Quality results, shown on the job's Data quality tab.
+        # Glue checks this against a ruleset named after each run's evaluation
+        # context (data_quality_context() in the script), not the job.
         Sid      = "PublishDataQualityResults"
         Effect   = "Allow"
         Action   = ["glue:PublishDataQuality"]
-        Resource = ["arn:aws:glue:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:job/${local.name}-bedgraph-to-iceberg"]
+        Resource = ["arn:aws:glue:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:dataQualityRuleset/bedgraph_signal_*"]
       },
     ]
   })

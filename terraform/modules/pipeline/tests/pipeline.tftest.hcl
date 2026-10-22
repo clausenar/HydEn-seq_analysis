@@ -564,10 +564,10 @@ run "glue_job_role_is_least_privilege" {
   assert {
     condition = alltrue(flatten([
       for s in jsondecode(aws_iam_role_policy.glue_job.policy).Statement : [
-        for r in s.Resource : !startswith(r, "arn:aws:glue:") || strcontains(r, ":catalog") || strcontains(r, "hyden_seq_dev") || endswith(r, ":job/hyden-seq-dev-bedgraph-to-iceberg")
+        for r in s.Resource : !startswith(r, "arn:aws:glue:") || strcontains(r, ":catalog") || strcontains(r, "hyden_seq_dev") || endswith(r, ":dataQualityRuleset/bedgraph_signal_*")
       ]
     ]))
-    error_message = "Glue permissions must be limited to the stage's own database and its own job (Data Quality results)."
+    error_message = "Glue permissions must be limited to the stage's own database and the job's Data Quality results."
   }
 }
 

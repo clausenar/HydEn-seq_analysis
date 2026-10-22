@@ -24,6 +24,7 @@ Everything except main() runs on a plain local SparkSession, which is how
 tests/test_bedgraph_to_iceberg.py tests it.
 """
 
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -191,6 +192,11 @@ def no_quality_gate(silver: DataFrame) -> None:
     """Outside Glue (tests, local runs) there is no Glue Data Quality to call."""
 
 
+def data_quality_context(sample_name: str) -> str:
+    """Name for the Data Quality results: Glue allows only letters, digits, - and _."""
+    return "bedgraph_signal_" + re.sub(r"[^A-Za-z0-9_-]", "_", sample_name)
+
+
 def glue_data_quality_gate(spark: SparkSession, context: str) -> QualityGate:
     """Evaluate SILVER_RULESET with Glue Data Quality; raise if any rule fails."""
     from awsglue.context import GlueContext  # only exist inside Glue
@@ -248,7 +254,7 @@ def main() -> None:
         builder = builder.config(key, value)
     spark = builder.getOrCreate()
 
-    gate = glue_data_quality_gate(spark, context=f"bedgraph_signal:{args['sample_name']}")
+    gate = glue_data_quality_gate(spark, context=data_quality_context(args["sample_name"]))
     result = run(spark, args["input_path"], args["database"], args["sample_name"], quality_gate=gate)
     print(f"bedgraph_to_iceberg: {result}")
 

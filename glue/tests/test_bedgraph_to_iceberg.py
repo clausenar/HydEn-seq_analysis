@@ -8,6 +8,7 @@ Needs Java 17 and network access the first time (Spark downloads the Iceberg jar
     pytest glue/tests
 """
 
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -207,3 +208,10 @@ def test_ruleset_covers_every_sacCer3_chromosome_and_the_key_columns():
     for column in ("chrom", "start_pos", "end_pos", "score"):
         assert f'IsComplete "{column}"' in rules
     assert 'DistinctValuesCount "strand" = 2' in rules
+
+
+def test_data_quality_context_only_uses_characters_glue_accepts():
+    # Found in the first dev run: Glue rejects anything but letters, digits, - and _.
+    for sample in ("SRR1609190sub6", "Kunkel_Ribo-seq_Pol2MGrnh201.1b.1", "ALL", "a:b c/d"):
+        assert re.fullmatch(r"[A-Za-z0-9_-]+", job.data_quality_context(sample))
+    assert job.data_quality_context("Kunkel.1b.1") == "bedgraph_signal_Kunkel_1b_1"
